@@ -2,7 +2,7 @@
 
 > Documentação detalhada do motor, dos estágios de DSP, do perfil por foto e da
 > solução de problemas. Para a visão geral do produto, volte ao
-> [README em português](../README.pt-BR.md) ou ao [README in English](../README.md).
+> [README em português](../README.md) ou ao [README em inglês](../README.en.md).
 
 Aprimoramento de áudio em tempo real para **qualquer fone com fio ou Bluetooth** no Windows, macOS e Linux. O processamento acontece fora do player: o sistema inteiro passa pelo motor DSP do Audio Pulse, que aplica equalização, Bass Boost, dinâmica, compensação de loudness, crossfeed, áudio espacial e equalização adaptativa.
 
@@ -92,7 +92,7 @@ Alterações **discretas** (aplicar preset, ligar/desligar bypass, trocar o modo
 ## Estrutura do projeto
 
 ```
-som/
+audio-pulse/
 ├── crates/audio-pulse-dsp/      # DSP puro, testável, sem dependência de dispositivo
 │   └── src/
 │       ├── biquad.rs            # filtros RBJ (peaking, shelves, LP, HP)
@@ -138,7 +138,8 @@ som/
 │   ├── styles.css               # design system
 │   └── App.tsx / main.tsx
 ├── scripts/generate-icons.mjs   # ícones do app
-└── README.md
+├── README.md                    # capa em português
+└── README.en.md                 # English front page
 ```
 
 ---
