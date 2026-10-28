@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="420" viewBox="0 0 1600 420" role="img" aria-label="Audio Pulse — studio-grade sound from any headphones">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090c14"/>
+      <stop offset="1" stop-color="#161b2b"/>
+    </linearGradient>
+    <radialGradient id="cyanGlow" cx="0.18" cy="0.1" r="0.75">
+      <stop offset="0" stop-color="#4fd6e0" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#4fd6e0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violetGlow" cx="0.88" cy="0.92" r="0.7">
+      <stop offset="0" stop-color="#9e70f5" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#9e70f5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111623"/>
+      <stop offset="1" stop-color="#1e2338"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5cf2d4"/>
+      <stop offset="0.5" stop-color="#73a1ff"/>
+      <stop offset="1" stop-color="#b880ff"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c9dcff"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#cyanGlow)"/>
+  <rect width="1600" height="420" fill="url(#violetGlow)"/>
+
+  <g transform="translate(120 90)">
+    <rect width="240" height="240" rx="52" fill="url(#tile)" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
+    <circle cx="120" cy="124" r="76" fill="none" stroke="#c8e1ff" stroke-opacity="0.14" stroke-width="2.4"/>
+    <g filter="url(#softGlow)" opacity="0.55">
+      <rect x="107" y="62" width="26" height="124" rx="13" fill="url(#bars)"/>
+      <rect x="47" y="96" width="26" height="56" rx="13" fill="url(#bars)"/>
+      <rect x="167" y="89" width="26" height="70" rx="13" fill="url(#bars)"/>
+    </g>
+    <g fill="url(#bars)">
+      <rect x="47" y="97" width="26" height="54" rx="13"/>
+      <rect x="68.5" y="77" width="26" height="94" rx="13"/>
+      <rect x="90" y="55" width="26" height="138" rx="13"/>
+      <rect x="111.5" y="63" width="26" height="122" rx="13"/>
+      <rect x="133" y="93" width="26" height="62" rx="13"/>
+      <rect x="154.5" y="78" width="26" height="92" rx="13"/>
+      <rect x="176" y="103" width="26" height="42" rx="13"/>
+    </g>
+  </g>
+
+  <text x="432" y="196" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="96" font-weight="700" letter-spacing="-3" fill="url(#word)">Audio Pulse</text>
+  <text x="436" y="252" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="28" fill="#9fb0c8">Studio-grade sound from any headphones.</text>
+
+  <g font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="17" fill="#b9c8dd">
+    <rect x="436" y="292" width="272" height="40" rx="20" fill="#ffffff" fill-opacity="0.05" stroke="#8fd8e2" stroke-opacity="0.28"/>
+    <text x="456" y="318">10-band parametric DSP</text>
+    <rect x="724" y="292" width="280" height="40" rx="20" fill="#ffffff" fill-opacity="0.05" stroke="#9fb6ff" stroke-opacity="0.28"/>
+    <text x="744" y="318">Local AI ear profiling</text>
+    <rect x="1020" y="292" width="290" height="40" rx="20" fill="#ffffff" fill-opacity="0.05" stroke="#c3a0ff" stroke-opacity="0.28"/>
+    <text x="1040" y="318">Windows · macOS · Linux</text>
+  </g>
+
+  <rect x="120" y="368" width="1210" height="1.6" fill="#ffffff" fill-opacity="0.07"/>
+</svg>

@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/audio-pulse-dsp", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Douglas Groff"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = 3

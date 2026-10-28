@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Audio Pulse",
+  "version": "1.0.0",
+  "identifier": "com.audiopulse.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Audio Pulse",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 580,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "theme": "Dark",
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "category": "Music",
+    "shortDescription": "Professional audio enhancement for any headphones",
+    "longDescription": "Audio Pulse applies a low-latency graphic equalizer, bass enhancement, dynamics, ISO 226 loudness compensation and binaural spatial audio to any wired or Bluetooth headphones on Windows, macOS and Linux.",
+    "copyright": "© 2026 Douglas Groff"
+  }
+}

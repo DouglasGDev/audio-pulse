@@ -1,0 +1,35 @@
+{
+  "name": "audio-pulse",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "System-wide DSP for any headphones: 10-band EQ, parametric AutoEQ, bass synthesis, spatial audio and local AI ear profiling",
+  "license": "GPL-3.0-or-later",
+  "author": "Douglas Groff",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DouglasGDev/audio-pulse.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}
