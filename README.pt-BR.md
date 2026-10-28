@@ -53,20 +53,22 @@ sem conta, sem telemetria, sem processamento na nuvem.
 
 ## Capturas
 
-| Equalizador | Perfil da orelha |
+Clique em qualquer captura para abrir em resolução máxima.
+
+| Equalizador | Presets |
 | --- | --- |
-| <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Página do equalizador" /></a> | <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Página do perfil da orelha" /></a> |
-| 10 bandas, tone, Bass Boost, loudness, crossfeed e AutoEQ na mesma cadeia. | Recorte guiado, análise de profundidade local, confiança e proposta de AutoEQ reversível. |
+| <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Página do equalizador" /></a> | <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Página de presets" /></a> |
+| 10 bandas, tone, Bass Boost, loudness, crossfeed e AutoEQ na mesma cadeia. | Presets de modo, referências de fones, perfis personalizados e AutoEQ. |
 
 | Áudio espacial | Dinâmica |
 | --- | --- |
 | <a href="docs/screenshots/spatial.png"><img src="docs/screenshots/spatial.png" alt="Página de áudio espacial" /></a> | <a href="docs/screenshots/dynamics.png"><img src="docs/screenshots/dynamics.png" alt="Página de dinâmica" /></a> |
 | Binaural, HRTF dinâmico e surround virtual com largura e ambiente. | Compressor e limiter com look-ahead e curvas de transferência ao vivo. |
 
-| Presets | Ajustes |
+| Perfil da orelha | Ajustes |
 | --- | --- |
-| <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Página de presets" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Página de ajustes" /></a> |
-| Presets de modo, referências de fones, perfis personalizados e AutoEQ. | Dispositivos, rota, buffer, tema, idioma e atalhos globais. |
+| <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Página do perfil da orelha" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Página de ajustes" /></a> |
+| Recorte guiado, análise de profundidade local, confiança e proposta de AutoEQ reversível. | Dispositivos, rota, buffer, tema, idioma e atalhos globais. |
 
 ## Como funciona
 

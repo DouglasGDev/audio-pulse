@@ -53,20 +53,22 @@ on your machine: no account, no telemetry, no cloud processing.
 
 ## Screenshots
 
-| Equalizer | Ear profiling |
+Click any screenshot to open it at full resolution.
+
+| Equalizer | Presets |
 | --- | --- |
-| <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Equalizer page" /></a> | <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Ear profiling page" /></a> |
-| 10 bands, tone, Bass Boost, loudness, crossfeed and AutoEQ in one chain. | Guided crop, local depth analysis, confidence gates and a reversible AutoEQ proposal. |
+| <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Equalizer page" /></a> | <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Presets page" /></a> |
+| 10 bands, tone, Bass Boost, loudness, crossfeed and AutoEQ in one chain. | Mode presets, headphone references, custom profiles and AutoEQ import. |
 
 | Spatial audio | Dynamics |
 | --- | --- |
 | <a href="docs/screenshots/spatial.png"><img src="docs/screenshots/spatial.png" alt="Spatial audio page" /></a> | <a href="docs/screenshots/dynamics.png"><img src="docs/screenshots/dynamics.png" alt="Dynamics page" /></a> |
 | Binaural, dynamic HRTF and virtual surround with width and room controls. | Compressor and look-ahead limiter with live transfer curves. |
 
-| Presets | Settings |
+| Ear profiling | Settings |
 | --- | --- |
-| <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Presets page" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings page" /></a> |
-| Mode presets, headphone references, custom profiles and AutoEQ import. | Devices, routing, buffer, theme, language and global shortcuts. |
+| <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Ear profiling page" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings page" /></a> |
+| Guided crop, local depth analysis, confidence gates and a reversible AutoEQ proposal. | Devices, routing, buffer, theme, language and global shortcuts. |
 
 ## How it works
 
