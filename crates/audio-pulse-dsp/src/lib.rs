@@ -31,8 +31,8 @@ pub use params::{
     AdaptiveEqParams, AutoEqFilter, AutoEqParams, BassParams, CompressorParams, CrossfeedParams,
     EarProfileParams, FilterKind, LimiterParams, LoudSoundReductionParams, LoudnessParams,
     ProcessingParams, SpatialMode, SpatialParams, ToneParams, ADAPTIVE_EQ_BANDS,
-    ADAPTIVE_EQ_FREQUENCIES, ADAPTIVE_EQ_MAX_DB, EQ_BAND_COUNT, EQ_FREQUENCIES,
-    MAX_AUTOEQ_FILTERS, SPECTRUM_BANDS,
+    ADAPTIVE_EQ_FREQUENCIES, ADAPTIVE_EQ_MAX_DB, EQ_BAND_COUNT, EQ_FREQUENCIES, MAX_AUTOEQ_FILTERS,
+    SPECTRUM_BANDS,
 };
 pub use presets::{builtin_presets, find_builtin, Preset, PresetCategory};
 

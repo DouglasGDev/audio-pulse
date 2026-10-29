@@ -132,12 +132,18 @@ fn build_menu(app: &AppHandle, state: &AppState) -> tauri::Result<Menu<tauri::Wr
         app,
         labels.spatial,
         true,
-        &[&spatial_off, &spatial_binaural, &spatial_hrtf, &spatial_surround],
+        &[
+            &spatial_off,
+            &spatial_binaural,
+            &spatial_hrtf,
+            &spatial_surround,
+        ],
     )?;
 
     let mut preset_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
     for preset in audio_pulse_dsp::builtin_presets() {
-        if preset.category == PresetCategory::Headphone || preset.category == PresetCategory::Custom {
+        if preset.category == PresetCategory::Headphone || preset.category == PresetCategory::Custom
+        {
             continue;
         }
         let label = preset_label(&preset.id, &preset.name, language);

@@ -44,10 +44,10 @@ sem conta, sem telemetria, sem processamento na nuvem.
 | Som | Personalização | Integração com o sistema |
 | --- | --- | --- |
 | **EQ gráfico de 10 bandas** — 31 Hz a 16 kHz, ±12 dB, com curva de resposta ao vivo e nós arrastáveis | **Perfil da orelha** — modelo de profundidade local estima a concha e propõe correção de 2–8 kHz | **Rota para todo o sistema** — cabo virtual e troca automática da saída padrão no Windows |
-| **AutoEQ paramétrico** — até 16 filtros PK/LS/HS, importação de `ParametricEQ.txt`, preamp | **Presets** — 9 modos de escuta e 12 perfis de fone de referência | **Volume sincronizado** — o slider do app e o volume do Windows são o mesmo controle |
+| **AutoEQ/OPRA** — até 16 filtros PK/LS/HS, importação TXT ou JSON, preamp automático | **Presets** — 12 modos de escuta e 20 perfis de fone medidos | **Volume sincronizado** — o slider do app e o volume do Windows são o mesmo controle |
 | **EQ adaptativo** — 5 bandas de oitava a cada 20 ms, ±3 dB, headroom preditivo; determinístico, não é caixa-preta | **Presets personalizados** — criar, exportar e importar perfis JSON | **Perfis por dispositivo** — aplica um preset quando uma saída específica inicia |
 | **Bass Boost** — low shelf e síntese de harmônicos pelo fenômeno do fundamental ausente | **Estágio do perfil da orelha** — soma-se ao preset e ao AutoEQ; **Restaurar padrões** em um clique | **Bandeja, atalhos, autostart** — controle sem abrir a janela |
-| **Dinâmica** — compressor e limiter com look-ahead de 5 ms | | **Bateria sem fio** — relatório HID de receptores USB no Windows |
+| **Dinâmica** — compressor RMS com sidechain e limiter true-peak de 5 ms | | **Bateria sem fio** — relatório HID de receptores USB no Windows |
 | **Loudness** — compensação ISO 226 que acompanha o volume master | | **Medidores reais** — espectro de 56 bandas, níveis L/R, redução de ganho, CPU, latência e xruns |
 | **Redução de sons altos** — compressor lento e estéreo depois do volume; intensidade ajustável e atuação em tempo real | | |
 | **Áudio espacial** — binaural, HRTF dinâmico e upmix 7.1; crossfeed para fones | | **Interface** — dark/light, português e inglês, responsiva |
@@ -59,12 +59,12 @@ Clique em qualquer captura para abrir em resolução máxima.
 | Equalizador | Presets |
 | --- | --- |
 | <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Página do equalizador" /></a> | <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Página de presets" /></a> |
-| 10 bandas, tone, Bass Boost, loudness, crossfeed e AutoEQ na mesma cadeia. | Presets de modo, referências de fones, perfis personalizados e AutoEQ. |
+| 10 bandas, tone, Bass Boost, loudness, crossfeed e AutoEQ na mesma cadeia. | Presets de modo, perfis de fone medidos, perfis personalizados e AutoEQ/OPRA. |
 
 | Áudio espacial | Dinâmica |
 | --- | --- |
 | <a href="docs/screenshots/spatial.png"><img src="docs/screenshots/spatial.png" alt="Página de áudio espacial" /></a> | <a href="docs/screenshots/dynamics.png"><img src="docs/screenshots/dynamics.png" alt="Página de dinâmica" /></a> |
-| Binaural, HRTF dinâmico e surround virtual com largura e ambiente. | Compressor e limiter com look-ahead e curvas de transferência ao vivo. |
+| Binaural, HRTF dinâmico e surround virtual com largura e ambiente. | Compressor RMS e limiter true-peak com curvas de transferência ao vivo. |
 
 | Perfil da orelha | Ajustes |
 | --- | --- |
@@ -158,7 +158,7 @@ npm install
 npm run tauri dev      # app desktop com hot reload
 npm run tauri build    # binário de release + instalador
 
-cargo test --workspace # DSP, parser AutoEQ, resampler, migração de config
+cargo test --workspace # DSP, parsers AutoEQ/OPRA, resampler, migração de config
 npm run build          # type-check + frontend de produção
 ```
 
@@ -210,8 +210,8 @@ Todos podem ser redefinidos em *Ajustes → Atalhos*.
 
 - **É necessário um cabo virtual** para processar o sistema inteiro; não há APO,
   Audio Server Plugin nem filtro PipeWire neste projeto.
-- **O AutoEQ é apenas paramétrico** — arquivos GraphicEQ e perfis FIR/convolução
-  não são importados.
+- **O AutoEQ é apenas paramétrico** — TXT e JSON do AutoEQ e JSON do OPRA são
+  aceitos; arquivos GraphicEQ e perfis FIR/convolução não são importados.
 - **O áudio espacial é um modelo físico, não uma HRTF medida**; a externalização
   varia entre pessoas. O surround é um upmix estéreo, não decodificação 7.1.
 - **O EQ adaptativo não corrige sala nem fone.** Ele equilibra o material em
@@ -237,9 +237,10 @@ derivado distribuído deve continuar aberto sob os mesmos termos. Veja
 [LICENSE](LICENSE).
 
 Componentes de terceiros e suas licenças estão em
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Os perfis de fone embutidos são
-curvas de referência, não medições de laboratório, e o projeto não é afiliado a
-fabricantes de fones.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Os perfis de fone embutidos
+derivam de medições públicas (Rtings e oratory1990) convertidas para o modelo
+paramétrico do AutoEQ; não são medições da sua unidade, e o projeto não é
+afiliado a fabricantes de fones.
 
 <p align="center">
   Feito por <a href="https://github.com/DouglasGDev">Douglas Groff</a> ·

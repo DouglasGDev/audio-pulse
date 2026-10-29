@@ -1,11 +1,11 @@
 //! Persistent configuration with debounced, atomic JSON writes.
 
 use crate::models::Settings;
+use audio_pulse_dsp::presets::Preset;
+use audio_pulse_dsp::ProcessingParams;
 use crossbeam_channel::{bounded, Sender};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use audio_pulse_dsp::presets::Preset;
-use audio_pulse_dsp::ProcessingParams;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,6 +22,10 @@ pub struct PersistedConfig {
     pub settings: Settings,
     pub custom_presets: Vec<Preset>,
     pub active_preset_id: Option<String>,
+    /// Measured headphone correction currently selected (built-in profile or
+    /// imported AutoEQ/OPRA). Independent from the content preset.
+    #[serde(default)]
+    pub active_headphone_id: Option<String>,
     /// One-time marker: the master was already migrated onto the Windows
     /// endpoint, so the DSP no longer applies its own master gain.
     #[serde(default)]
@@ -36,6 +40,7 @@ impl Default for PersistedConfig {
             settings: Settings::default(),
             custom_presets: Vec::new(),
             active_preset_id: None,
+            active_headphone_id: None,
             volume_sync_initialized: false,
         }
     }
@@ -101,10 +106,7 @@ impl ConfigStore {
             .spawn(move || {
                 while save_rx.recv().is_ok() {
                     // Coalesce bursts (slider drags, volume changes).
-                    while save_rx
-                        .recv_timeout(Duration::from_millis(350))
-                        .is_ok()
-                    {}
+                    while save_rx.recv_timeout(Duration::from_millis(350)).is_ok() {}
                     let snapshot = thread_data.lock().clone();
                     if let Err(err) = write_atomic(&thread_path, &snapshot) {
                         log::error!("failed to save config: {err}");

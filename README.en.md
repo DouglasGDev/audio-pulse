@@ -44,10 +44,10 @@ on your machine: no account, no telemetry, no cloud processing.
 | Sound | Personalization | Desktop integration |
 | --- | --- | --- |
 | **10-band graphic EQ** — 31 Hz to 16 kHz, ±12 dB, with a live response curve and draggable nodes | **Ear profiling** — local depth model estimates concha geometry and proposes a 2–8 kHz correction | **System-wide routing** — virtual cable plus automatic default-endpoint switch on Windows |
-| **Parametric AutoEQ** — up to 16 PK/LS/HS filters, `ParametricEQ.txt` import, preamp | **Presets** — 9 listening modes and 12 reference headphone profiles | **Volume sync** — the app slider and the Windows volume controller are one control |
+| **Parametric AutoEQ/OPRA** — up to 16 PK/LS/HS filters, TXT or JSON import, automatic preamp | **Presets** — 12 listening modes and 20 measured headphone profiles | **Volume sync** — the app slider and the Windows volume controller are one control |
 | **Adaptive EQ** — 5 octave bands every 20 ms, ±3 dB, predictive headroom; deterministic, not a black box | **Custom presets** — create, export and import JSON profiles | **Per-device profiles** — apply a preset when a specific output starts |
 | **Bass Boost** — low shelf plus missing-fundamental harmonic synthesis | **Ear profile stage** — adds to the preset and AutoEQ; one-click **Restore defaults** | **Tray, shortcuts, autostart** — control playback without opening the window |
-| **Dynamics** — compressor and 5 ms look-ahead limiter | | **Wireless battery** — HID charge reports from USB receivers on Windows |
+| **Dynamics** — RMS compressor with a sidechain low-cut and a 5 ms true-peak limiter | | **Wireless battery** — HID charge reports from USB receivers on Windows |
 | **Loudness** — ISO 226 compensation that follows the master volume | | **Real meters** — 56-band spectrum, L/R levels, gain reduction, CPU, latency and xruns |
 | **Loud sound reduction** — slow stereo compressor after the volume; adjustable intensity and live engagement | | |
 | **Spatial audio** — binaural, dynamic HRTF and 7.1 upmix; crossfeed for headphones | | **Interface** — dark/light, English and pt-BR, responsive |
@@ -59,12 +59,12 @@ Click any screenshot to open it at full resolution.
 | Equalizer | Presets |
 | --- | --- |
 | <a href="docs/screenshots/equalizer.png"><img src="docs/screenshots/equalizer.png" alt="Equalizer page" /></a> | <a href="docs/screenshots/presets.png"><img src="docs/screenshots/presets.png" alt="Presets page" /></a> |
-| 10 bands, tone, Bass Boost, loudness, crossfeed and AutoEQ in one chain. | Mode presets, headphone references, custom profiles and AutoEQ import. |
+| 10 bands, tone, Bass Boost, loudness, crossfeed and AutoEQ in one chain. | Mode presets, measured headphone profiles, custom profiles and AutoEQ/OPRA import. |
 
 | Spatial audio | Dynamics |
 | --- | --- |
 | <a href="docs/screenshots/spatial.png"><img src="docs/screenshots/spatial.png" alt="Spatial audio page" /></a> | <a href="docs/screenshots/dynamics.png"><img src="docs/screenshots/dynamics.png" alt="Dynamics page" /></a> |
-| Binaural, dynamic HRTF and virtual surround with width and room controls. | Compressor and look-ahead limiter with live transfer curves. |
+| Binaural, dynamic HRTF and virtual surround with width and room controls. | RMS compressor and true-peak limiter with live transfer curves. |
 
 | Ear profiling | Settings |
 | --- | --- |
@@ -157,7 +157,7 @@ npm install
 npm run tauri dev      # desktop app with hot reload
 npm run tauri build    # release binary + installer
 
-cargo test --workspace # DSP, AutoEQ parser, resampler, config migration
+cargo test --workspace # DSP, AutoEQ/OPRA parsers, resampler, config migration
 npm run build          # type-check + production frontend
 ```
 
@@ -209,8 +209,8 @@ All shortcuts can be rebound in *Settings → Shortcuts*.
 
 - **A virtual cable is required** for system-wide processing; there is no APO,
   Audio Server Plugin or PipeWire filter in this project.
-- **AutoEQ is parametric only** — GraphicEQ text and FIR/convolution profiles
-  are not imported.
+- **AutoEQ is parametric only** — AutoEQ TXT/JSON and OPRA JSON are accepted;
+  GraphicEQ text and FIR/convolution profiles are not imported.
 - **Spatial audio is a physical model, not a measured HRTF**; externalization
   varies between listeners. Surround is a stereo upmix, not 7.1 decoding.
 - **Adaptive EQ is not room or headphone correction.** It balances program
@@ -235,8 +235,9 @@ derivative must remain open source under the same terms. See [LICENSE](LICENSE).
 
 Third-party components and their licenses are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The bundled headphone profiles
-are reference curves, not laboratory measurements, and the project is not
-affiliated with any headphone manufacturer.
+are derived from public measurements (Rtings and oratory1990) converted to the
+AutoEQ parametric model; they are not measurements of your unit, and the project
+is not affiliated with any headphone manufacturer.
 
 <p align="center">
   Built by <a href="https://github.com/DouglasGDev">Douglas Groff</a> ·

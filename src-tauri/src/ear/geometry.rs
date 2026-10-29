@@ -287,9 +287,11 @@ fn search_zone(
             let reach_x = ZONE_RX * GUIDE_RX * RING_OUTER;
             let reach_y = ZONE_RY * GUIDE_RY * RING_OUTER;
             let x0 = ((center_x - reach_x).floor() as isize).max(0) as usize;
-            let x1 = ((center_x + reach_x).ceil() as isize).clamp(0, CROP_SIZE as isize - 1) as usize;
+            let x1 =
+                ((center_x + reach_x).ceil() as isize).clamp(0, CROP_SIZE as isize - 1) as usize;
             let y0 = ((center_y - reach_y).floor() as isize).max(0) as usize;
-            let y1 = ((center_y + reach_y).ceil() as isize).clamp(0, CROP_SIZE as isize - 1) as usize;
+            let y1 =
+                ((center_y + reach_y).ceil() as isize).clamp(0, CROP_SIZE as isize - 1) as usize;
 
             let mut inner_all: Vec<f32> = Vec::new();
             let mut inner_skin: Vec<f32> = Vec::new();
@@ -355,10 +357,9 @@ fn search_zone(
             let valid_sectors = medians.len();
             let rim_low = percentile_owned(medians, 25.0);
             let contrast = (rim_low - inner) / ear_span;
-            let distance =
-                ((center_u / ZONE_RX).powi(2) + (center_v / ZONE_RY).powi(2)).sqrt();
+            let distance = ((center_u / ZONE_RX).powi(2) + (center_v / ZONE_RY).powi(2)).sqrt();
             let score = contrast - CENTER_PENALTY * (distance - CENTER_FREE_DISTANCE).max(0.0);
-            if best.as_ref().map_or(true, |current| score > current.score) {
+            if best.as_ref().is_none_or(|current| score > current.score) {
                 best = Some(Candidate {
                     u: center_u,
                     v: center_v,
@@ -444,8 +445,7 @@ pub fn analyze(rgb: &RgbImage, depth: &DepthMap) -> Result<Geometry, String> {
         }
     }
     spread_values.sort_by(f32::total_cmp);
-    let ear_span =
-        (percentile(&spread_values, 90.0) - percentile(&spread_values, 10.0)).max(0.04);
+    let ear_span = (percentile(&spread_values, 90.0) - percentile(&spread_values, 10.0)).max(0.04);
 
     let mut rim_all: Vec<f32> = Vec::new();
     let mut rim_skin: Vec<f32> = Vec::new();
@@ -532,7 +532,7 @@ pub fn analyze(rgb: &RgbImage, depth: &DepthMap) -> Result<Geometry, String> {
                 continue;
             }
             let value = smooth[index];
-            if seed.map_or(true, |(_, current)| value < current) {
+            if seed.is_none_or(|(_, current)| value < current) {
                 seed = Some((index, value));
             }
         }
@@ -546,7 +546,7 @@ pub fn analyze(rgb: &RgbImage, depth: &DepthMap) -> Result<Geometry, String> {
                     continue;
                 }
                 let value = smooth[index];
-                if seed.map_or(true, |(_, current)| value < current) {
+                if seed.is_none_or(|(_, current)| value < current) {
                     seed = Some((index, value));
                 }
             }
@@ -653,11 +653,9 @@ pub fn analyze(rgb: &RgbImage, depth: &DepthMap) -> Result<Geometry, String> {
     } else {
         1.0
     };
-    let mut confidence = (0.30 * contrast_score
-        + 0.35 * bowl_score
-        + 0.15 * enclosure_score
-        + 0.20 * skin_score)
-        * exposure_factor;
+    let mut confidence =
+        (0.30 * contrast_score + 0.35 * bowl_score + 0.15 * enclosure_score + 0.20 * skin_score)
+            * exposure_factor;
     if touches_border {
         confidence *= 0.85;
     }
@@ -715,7 +713,8 @@ fn exposure(rgb: &RgbImage, mask: &[bool]) -> (f32, f32) {
                 continue;
             }
             let pixel = rgb.get_pixel(x as u32, y as u32);
-            let luma = 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
+            let luma =
+                0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
             sum += luma as f64;
             count += 1;
             if luma > 245.0 {
@@ -726,10 +725,7 @@ fn exposure(rgb: &RgbImage, mask: &[bool]) -> (f32, f32) {
     if count == 0 {
         return (0.0, 0.0);
     }
-    (
-        (sum / count as f64) as f32,
-        clipped as f32 / count as f32,
-    )
+    ((sum / count as f64) as f32, clipped as f32 / count as f32)
 }
 
 #[cfg(test)]
@@ -760,19 +756,43 @@ mod tests {
 
     #[test]
     fn finds_concha_bowl() {
-        let rgb = RgbImage::from_pixel(CROP_SIZE as u32, CROP_SIZE as u32, image::Rgb([180, 150, 130]));
+        let rgb = RgbImage::from_pixel(
+            CROP_SIZE as u32,
+            CROP_SIZE as u32,
+            image::Rgb([180, 150, 130]),
+        );
         let depth = synthetic_depth();
         let geometry = analyze(&rgb, &depth).expect("geometry");
         assert!(geometry.concha_size > 0.10, "size {}", geometry.concha_size);
-        assert!((geometry.basin_center_x - 262.0).abs() < 15.0, "x {}", geometry.basin_center_x);
-        assert!((geometry.basin_center_y - 300.0).abs() < 15.0, "y {}", geometry.basin_center_y);
-        assert!(geometry.concha_depth > 0.5, "depth {}", geometry.concha_depth);
-        assert!(geometry.confidence > 0.4, "confidence {}", geometry.confidence);
+        assert!(
+            (geometry.basin_center_x - 262.0).abs() < 15.0,
+            "x {}",
+            geometry.basin_center_x
+        );
+        assert!(
+            (geometry.basin_center_y - 300.0).abs() < 15.0,
+            "y {}",
+            geometry.basin_center_y
+        );
+        assert!(
+            geometry.concha_depth > 0.5,
+            "depth {}",
+            geometry.concha_depth
+        );
+        assert!(
+            geometry.confidence > 0.4,
+            "confidence {}",
+            geometry.confidence
+        );
     }
 
     #[test]
     fn zone_moves_toward_the_bowl() {
-        let rgb = RgbImage::from_pixel(CROP_SIZE as u32, CROP_SIZE as u32, image::Rgb([180, 150, 130]));
+        let rgb = RgbImage::from_pixel(
+            CROP_SIZE as u32,
+            CROP_SIZE as u32,
+            image::Rgb([180, 150, 130]),
+        );
         let depth = synthetic_depth();
         let geometry = analyze(&rgb, &depth).expect("geometry");
         assert!(
@@ -784,7 +804,11 @@ mod tests {
 
     #[test]
     fn flat_depth_has_low_confidence() {
-        let rgb = RgbImage::from_pixel(CROP_SIZE as u32, CROP_SIZE as u32, image::Rgb([180, 150, 130]));
+        let rgb = RgbImage::from_pixel(
+            CROP_SIZE as u32,
+            CROP_SIZE as u32,
+            image::Rgb([180, 150, 130]),
+        );
         let depth = DepthMap {
             width: CROP_SIZE,
             height: CROP_SIZE,
@@ -795,7 +819,11 @@ mod tests {
 
     #[test]
     fn bowl_outside_the_search_window_is_ignored() {
-        let rgb = RgbImage::from_pixel(CROP_SIZE as u32, CROP_SIZE as u32, image::Rgb([180, 150, 130]));
+        let rgb = RgbImage::from_pixel(
+            CROP_SIZE as u32,
+            CROP_SIZE as u32,
+            image::Rgb([180, 150, 130]),
+        );
         let mut depth = synthetic_depth();
         for y in 0..CROP_SIZE {
             for x in 0..CROP_SIZE {
@@ -815,8 +843,16 @@ mod tests {
             }
         }
         let geometry = analyze(&rgb, &depth).expect("geometry");
-        assert!(geometry.concha_depth < 0.1, "depth {}", geometry.concha_depth);
-        assert!(geometry.warnings.contains(&"no_basin"), "warnings {:?}", geometry.warnings);
+        assert!(
+            geometry.concha_depth < 0.1,
+            "depth {}",
+            geometry.concha_depth
+        );
+        assert!(
+            geometry.warnings.contains(&"no_basin"),
+            "warnings {:?}",
+            geometry.warnings
+        );
     }
 
     #[test]

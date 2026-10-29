@@ -42,6 +42,9 @@ export function TopBar() {
   const theme = view?.settings.theme ?? "dark";
   const battery = view?.battery ?? null;
   const active = view?.presets.find((preset) => preset.id === view.activePresetId);
+  const headphone = view?.presets.find(
+    (preset) => preset.id === view.activeHeadphoneId,
+  );
   const title = t(`nav.${page}` as MessageKey);
   const batteryTitle = battery
     ? translate(language, "topbar.battery", {
@@ -67,6 +70,18 @@ export function TopBar() {
           <Icon name="presets" size={15} />
           <span>{active ? presetTitle(language, active) : t("presets.noneActive")}</span>
         </button>
+
+        {headphone && (
+          <button
+            type="button"
+            className="preset-chip"
+            onClick={() => setPage("presets")}
+            title={t("presets.activeHeadphone")}
+          >
+            <Icon name="headphone" size={15} />
+            <span>{headphone.model}</span>
+          </button>
+        )}
 
         <button
           type="button"

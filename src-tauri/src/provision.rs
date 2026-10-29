@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
 
-const VB_CABLE_URL: &str =
-    "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip";
+const VB_CABLE_URL: &str = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip";
 const DEVICE_TIMEOUT: Duration = Duration::from_secs(45);
 const ERROR_GRACE: Duration = Duration::from_secs(3);
 
@@ -85,7 +84,9 @@ fn select_devices(state: &AppState, installed: Option<&str>) {
     if !changed {
         return;
     }
-    state.store.mutate(|config| config.settings = settings.clone());
+    state
+        .store
+        .mutate(|config| config.settings = settings.clone());
     state.restart_if_needed(&previous, &settings);
 }
 
@@ -336,9 +337,11 @@ mod platform {
         if actual.eq_ignore_ascii_case(expected.trim()) {
             Ok(())
         } else {
-            Err("O download do BlackHole não corresponde ao checksum publicado. \
+            Err(
+                "O download do BlackHole não corresponde ao checksum publicado. \
                  Instalação abortada."
-                .into())
+                    .into(),
+            )
         }
     }
 
@@ -356,9 +359,11 @@ mod platform {
             log::info!("BlackHole installer signature verified");
             Ok(())
         } else {
-            Err("A assinatura digital do instalador do BlackHole não pôde ser verificada. \
+            Err(
+                "A assinatura digital do instalador do BlackHole não pôde ser verificada. \
                  Instalação abortada."
-                .into())
+                    .into(),
+            )
         }
     }
 

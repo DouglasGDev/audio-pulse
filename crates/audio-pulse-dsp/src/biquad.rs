@@ -104,11 +104,37 @@ impl Biquad {
     /// biquad from scratch would zero `z1`/`z2` and produce a click.
     pub fn set_peaking(&mut self, sample_rate: f32, freq: f32, gain_db: f32, q: f32) {
         let retuned = Self::peaking(sample_rate, freq, gain_db, q);
-        self.b0 = retuned.b0;
-        self.b1 = retuned.b1;
-        self.b2 = retuned.b2;
-        self.a1 = retuned.a1;
-        self.a2 = retuned.a2;
+        self.assign(&retuned);
+    }
+
+    pub fn set_low_shelf(&mut self, sample_rate: f32, freq: f32, gain_db: f32, q: f32) {
+        let retuned = Self::low_shelf(sample_rate, freq, gain_db, q);
+        self.assign(&retuned);
+    }
+
+    pub fn set_high_shelf(&mut self, sample_rate: f32, freq: f32, gain_db: f32, q: f32) {
+        let retuned = Self::high_shelf(sample_rate, freq, gain_db, q);
+        self.assign(&retuned);
+    }
+
+    pub fn set_low_pass(&mut self, sample_rate: f32, freq: f32, q: f32) {
+        let retuned = Self::low_pass(sample_rate, freq, q);
+        self.assign(&retuned);
+    }
+
+    pub fn set_high_pass(&mut self, sample_rate: f32, freq: f32, q: f32) {
+        let retuned = Self::high_pass(sample_rate, freq, q);
+        self.assign(&retuned);
+    }
+
+    /// Swaps the coefficients but not the delay memory, so retuning a stage is
+    /// click-free even when the filter type changes.
+    pub fn assign(&mut self, other: &Self) {
+        self.b0 = other.b0;
+        self.b1 = other.b1;
+        self.b2 = other.b2;
+        self.a1 = other.a1;
+        self.a2 = other.a2;
     }
 
     pub fn low_shelf(sample_rate: f32, freq: f32, gain_db: f32, q: f32) -> Self {

@@ -220,7 +220,7 @@ export async function pickAutoEqFile(): Promise<string | null> {
   const picked = await open({
     multiple: false,
     directory: false,
-    filters: [{ name: "AutoEQ ParametricEQ", extensions: ["txt"] }],
+    filters: [{ name: "AutoEQ / OPRA", extensions: ["txt", "json"] }],
   });
   return typeof picked === "string" ? picked : null;
 }

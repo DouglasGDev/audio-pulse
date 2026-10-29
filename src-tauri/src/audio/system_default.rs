@@ -48,7 +48,12 @@ pub fn engage(
     cable_volume: f32,
     sync_volume: bool,
 ) -> Result<Option<Engaged>, String> {
-    imp::engage(cable_output_name, physical_output_name, cable_volume, sync_volume)
+    imp::engage(
+        cable_output_name,
+        physical_output_name,
+        cable_volume,
+        sync_volume,
+    )
 }
 
 /// Restores the previous default. When `volume` is set, it is written to the
@@ -154,11 +159,8 @@ mod imp {
         }
         if let Err(err) = session.switch_default(&cable.id) {
             if let Some(state) = cable_state {
-                let _ = session.apply_volume_by_id(
-                    &cable.id,
-                    Some(state.scalar),
-                    Some(state.muted),
-                );
+                let _ =
+                    session.apply_volume_by_id(&cable.id, Some(state.scalar), Some(state.muted));
             }
             let _ = session.switch_default(&previous.id);
             return Err(err);

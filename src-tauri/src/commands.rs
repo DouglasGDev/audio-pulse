@@ -3,9 +3,11 @@
 use crate::models::{AppView, DeviceList, EngineInfo, ParamsUpdate, Settings};
 use crate::shortcuts;
 use crate::state::{emit_view, AppState};
+use audio_pulse_dsp::autoeq::{parse_autoeq, ParsedAutoEq};
+use audio_pulse_dsp::{
+    Preset, PresetCategory, ProcessingParams, SpatialMode, PRESET_FORMAT, PRESET_FORMAT_VERSION,
+};
 use serde::{Deserialize, Serialize};
-use audio_pulse_dsp::autoeq::parse_autoeq_text;
-use audio_pulse_dsp::{Preset, PresetCategory, ProcessingParams, SpatialMode, PRESET_FORMAT, PRESET_FORMAT_VERSION};
 
 // Presets exported before the Audio Pulse rename stay importable.
 const LEGACY_PRESET_FORMAT: &str = "sonicenhance-preset";
@@ -26,26 +28,28 @@ pub fn get_state(state: State<'_, AppState>) -> AppView {
 }
 
 #[tauri::command]
-pub fn set_params(app: AppHandle, state: State<'_, AppState>, params: ProcessingParams) -> ParamsUpdate {
+pub fn set_params(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    params: ProcessingParams,
+) -> ParamsUpdate {
     let params = state.set_params(params);
     state.sync_tray(&app);
     ParamsUpdate {
         params,
         active_preset_id: state.store.snapshot().active_preset_id,
+        active_headphone_id: state.store.snapshot().active_headphone_id,
     }
 }
 
 #[tauri::command]
-pub fn set_volume(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    volume: f32,
-) -> ParamsUpdate {
+pub fn set_volume(app: AppHandle, state: State<'_, AppState>, volume: f32) -> ParamsUpdate {
     let params = state.set_volume(volume);
     state.sync_tray(&app);
     ParamsUpdate {
         params,
         active_preset_id: state.store.snapshot().active_preset_id,
+        active_headphone_id: state.store.snapshot().active_headphone_id,
     }
 }
 
@@ -56,6 +60,7 @@ pub fn toggle_bypass(app: AppHandle, state: State<'_, AppState>) -> ParamsUpdate
     ParamsUpdate {
         params,
         active_preset_id: state.store.snapshot().active_preset_id,
+        active_headphone_id: state.store.snapshot().active_headphone_id,
     }
 }
 
@@ -77,32 +82,48 @@ pub fn set_spatial_mode(
     Ok(ParamsUpdate {
         params,
         active_preset_id: state.store.snapshot().active_preset_id,
+        active_headphone_id: state.store.snapshot().active_headphone_id,
     })
 }
 
 #[tauri::command]
-pub fn apply_preset(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<AppView, String> {
+pub fn apply_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<AppView, String> {
     state.apply_preset(&id)?;
     emit_view(&app, &state);
     Ok(state.view())
 }
 
 #[tauri::command]
-pub fn save_preset(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<AppView, String> {
+pub fn save_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<AppView, String> {
     state.save_preset(&name)?;
     emit_view(&app, &state);
     Ok(state.view())
 }
 
 #[tauri::command]
-pub fn delete_preset(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<AppView, String> {
+pub fn delete_preset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<AppView, String> {
     state.delete_preset(&id)?;
     emit_view(&app, &state);
     Ok(state.view())
 }
 
 #[tauri::command]
-pub fn restore_sound_defaults(app: AppHandle, state: State<'_, AppState>) -> Result<AppView, String> {
+pub fn restore_sound_defaults(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppView, String> {
     state.restore_sound_defaults()?;
     emit_view(&app, &state);
     Ok(state.view())
@@ -140,8 +161,8 @@ pub fn import_preset(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<AppView, String> {
-    let text = fs::read_to_string(&path)
-        .map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Arquivo de preset inválido: {e}"))?;
 
@@ -152,7 +173,9 @@ pub fn import_preset(
         }
         let version = value.get("version").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
         if version > PRESET_FORMAT_VERSION {
-            return Err("Este preset foi criado por uma versão mais recente do Audio Pulse.".into());
+            return Err(
+                "Este preset foi criado por uma versão mais recente do Audio Pulse.".into(),
+            );
         }
         value
             .get("preset")
@@ -162,8 +185,8 @@ pub fn import_preset(
         value
     };
 
-    let mut preset: Preset = serde_json::from_value(preset_value)
-        .map_err(|e| format!("Preset inválido: {e}"))?;
+    let mut preset: Preset =
+        serde_json::from_value(preset_value).map_err(|e| format!("Preset inválido: {e}"))?;
     let fallback_name = Path::new(&path)
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -179,11 +202,28 @@ pub fn import_preset(
     preset.id = format!("custom-{stamp}");
     preset.built_in = false;
     preset.category = PresetCategory::Custom;
+    // The ear profile and the measured correction belong to the user and the
+    // device; an imported content preset never carries them.
+    preset.params.ear_profile = Default::default();
+    preset.params.auto_eq = Default::default();
     preset.params = preset.params.sanitized();
 
-    state.store.mutate(|config| config.custom_presets.push(preset));
+    state
+        .store
+        .mutate(|config| config.custom_presets.push(preset));
     emit_view(&app, &state);
     Ok(state.view())
+}
+
+fn apply_imported_autoeq(
+    params: &mut ProcessingParams,
+    parsed: ParsedAutoEq,
+    fallback_name: Option<String>,
+) {
+    params.auto_eq.enabled = true;
+    params.auto_eq.preamp_db = parsed.preamp_db;
+    params.auto_eq.filters = parsed.filters;
+    params.auto_eq.name = parsed.name.or(fallback_name);
 }
 
 #[tauri::command]
@@ -194,16 +234,21 @@ pub fn import_autoeq(
 ) -> Result<AppView, String> {
     let text = fs::read_to_string(&path)
         .map_err(|e| format!("Não foi possível ler o arquivo AutoEQ: {e}"))?;
-    let parsed = parse_autoeq_text(&text)?;
-    if parsed.filters.is_empty() {
-        return Err("Nenhum filtro PK/LS/HS foi encontrado no arquivo.".into());
-    }
+    let parsed = parse_autoeq(&text)?;
+    let fallback_name = Path::new(&path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
     let mut params = state.params();
-    params.auto_eq.enabled = true;
-    params.auto_eq.preamp_db = parsed.preamp_db;
-    params.auto_eq.filters = parsed.filters;
+    apply_imported_autoeq(&mut params, parsed, fallback_name);
     state.set_params_declick(params);
-    state.store.mutate(|config| config.active_preset_id = None);
+    // An imported curve replaces the measured correction but not the content
+    // preset; it is not a catalog entry, so no headphone id stays selected.
+    state
+        .store
+        .mutate(|config| config.active_headphone_id = None);
     emit_view(&app, &state);
     Ok(state.view())
 }
@@ -291,4 +336,50 @@ pub(crate) fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), Stri
         manager.disable()
     };
     result.map_err(|e| format!("Não foi possível atualizar a inicialização automática: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn import(text: &str, fallback: Option<&str>) -> ProcessingParams {
+        let mut params = ProcessingParams::default();
+        let parsed = parse_autoeq(text).expect("profile should be accepted");
+        apply_imported_autoeq(&mut params, parsed, fallback.map(str::to_string));
+        params
+    }
+
+    #[test]
+    fn autoeq_json_import_fills_the_curve_and_uses_the_file_stem() {
+        let params = import(
+            r#"{"fs":48000,"filters":[
+                {"type":"PEAKING","fc":105.0,"q":0.7,"gain":-3.0},
+                {"type":"HIGH_SHELF","fc":3200.0,"q":0.7,"gain":2.0}
+            ]}"#,
+            Some("minha-curva"),
+        );
+        assert!(params.auto_eq.enabled);
+        assert_eq!(params.auto_eq.filters.len(), 2);
+        assert_eq!(params.auto_eq.name.as_deref(), Some("minha-curva"));
+        assert!(params.auto_eq.preamp_db < 0.0);
+    }
+
+    #[test]
+    fn opra_record_import_keeps_the_product_name_and_declared_preamp() {
+        let params = import(
+            r#"{"type":"eq","id":"sennheiser_hd650_oratory","data":{
+                "type":"parametric_eq","product_id":"sennheiser_hd650",
+                "parameters":{"gain_db":-4.5,"bands":[
+                    {"type":"peak_dip","frequency":3000.0,"q":1.2,"gain_db":-2.0}
+                ]}
+            }}"#,
+            Some("fallback"),
+        );
+        assert_eq!(
+            params.auto_eq.name.as_deref(),
+            Some("sennheiser_hd650_oratory")
+        );
+        assert!((params.auto_eq.preamp_db + 4.5).abs() < 1e-4);
+        assert_eq!(params.auto_eq.filters.len(), 1);
+    }
 }

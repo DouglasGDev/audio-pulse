@@ -5,7 +5,7 @@ use base64::Engine;
 use image::{ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
-use super::geometry::{zone_radius_at, Geometry, CROP_SIZE, radius_at};
+use super::geometry::{radius_at, zone_radius_at, Geometry, CROP_SIZE};
 
 const GUIDE: [u8; 3] = [92, 228, 255];
 const ZONE: [u8; 3] = [120, 255, 190];

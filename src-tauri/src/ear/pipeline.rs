@@ -1,9 +1,9 @@
 //! Photo loading, preprocessing, acoustic mapping and the public analysis.
 
+use audio_pulse_dsp::{AutoEqFilter, FilterKind};
 use base64::Engine;
 use image::{imageops::FilterType, RgbImage};
 use serde::Serialize;
-use audio_pulse_dsp::{AutoEqFilter, FilterKind};
 use std::path::Path;
 use std::time::Instant;
 
@@ -78,11 +78,8 @@ pub fn load_photo(path: &str) -> Result<EarPhoto, String> {
         rgb = image::imageops::resize(&rgb, width, height, FilterType::Triangle);
     }
     let mut png = Vec::new();
-    rgb.write_to(
-        &mut std::io::Cursor::new(&mut png),
-        image::ImageFormat::Png,
-    )
-    .map_err(|err| format!("Falha ao preparar a foto: {err}"))?;
+    rgb.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("Falha ao preparar a foto: {err}"))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(png);
     Ok(EarPhoto {
         data_url: format!("data:image/png;base64,{encoded}"),

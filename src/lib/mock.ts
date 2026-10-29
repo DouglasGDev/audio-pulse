@@ -1,60 +1,17 @@
 import {
   EMPTY_TELEMETRY,
   type AppView,
-  type AutoEqFilter,
   type DeviceList,
   type EarModelStatus,
   type EngineInfo,
   type EngineMode,
   type ParamsUpdate,
   type Preset,
-  type PresetCategory,
   type ProcessingParams,
   type Settings,
   type Telemetry,
 } from "./types";
-
-const f = (
-  kind: AutoEqFilter["kind"],
-  freq: number,
-  gainDb: number,
-  q: number,
-): AutoEqFilter => ({ kind, freq, gainDb, q });
-
-const pk = (freq: number, gainDb: number, q: number) =>
-  f("peaking", freq, gainDb, q);
-const ls = (freq: number, gainDb: number, q: number) =>
-  f("lowshelf", freq, gainDb, q);
-const hs = (freq: number, gainDb: number, q: number) =>
-  f("highshelf", freq, gainDb, q);
-
-export function defaultParams(): ProcessingParams {
-  return {
-    preampDb: 0,
-    eqDb: new Array(10).fill(0),
-    bass: { enabled: false, intensity: 0.45, cutoffHz: 90, harmonics: 0.35 },
-    tone: { midDb: 0, trebleDb: 0 },
-    compressor: {
-      enabled: false,
-      thresholdDb: -18,
-      ratio: 2,
-      attackMs: 10,
-      releaseMs: 150,
-      kneeDb: 6,
-      makeupDb: 0,
-    },
-    limiter: { enabled: true, ceilingDb: -0.3, releaseMs: 80 },
-    loudness: { enabled: false, intensity: 0.6 },
-    loudSoundReduction: { enabled: false, intensity: 0.6 },
-    spatial: { mode: "off", width: 1, room: 0.35 },
-    crossfeed: { enabled: false, amount: 0.3, delayMs: 0.3 },
-    autoEq: { enabled: true, preampDb: 0, filters: [] },
-    adaptiveEq: { enabled: false, intensity: 0.55 },
-    earProfile: { enabled: false, preampDb: 0, filters: [] },
-    volume: 1,
-    bypass: false,
-  };
-}
+import { defaultParams, MOCK_PRESETS } from "./presetFixtures";
 
 export function defaultSettings(): Settings {
   return {
@@ -81,278 +38,6 @@ export function defaultSettings(): Settings {
     deviceProfiles: {},
   };
 }
-
-function modePreset(
-  id: string,
-  name: string,
-  category: PresetCategory,
-  description: string,
-  build: (params: ProcessingParams) => void,
-): Preset {
-  const params = defaultParams();
-  params.limiter.enabled = true;
-  build(params);
-  return {
-    id,
-    name,
-    category,
-    description,
-    brand: null,
-    model: null,
-    builtIn: true,
-    params,
-  };
-}
-
-function headphonePreset(
-  id: string,
-  brand: string,
-  model: string,
-  preampDb: number,
-  filters: AutoEqFilter[],
-): Preset {
-  const params = defaultParams();
-  params.limiter.enabled = true;
-  params.autoEq = { enabled: true, preampDb, filters };
-  return {
-    id,
-    name: `${brand} ${model}`,
-    category: "headphone",
-    description: `Curva de referência Audio Pulse para ${brand} ${model}.`,
-    brand,
-    model,
-    builtIn: true,
-    params,
-  };
-}
-
-export const MOCK_PRESETS: Preset[] = [
-  modePreset(
-    "music",
-    "Música",
-    "music",
-    "Curva equilibrada, graves sutis e compensação moderada.",
-    (p) => {
-      p.eqDb = [1, 0.8, 0.3, 0, -0.4, 0, 0.3, 0.6, 0.8, 0.5];
-      p.bass = { enabled: true, intensity: 0.25, cutoffHz: 85, harmonics: 0.25 };
-      p.loudness = { enabled: true, intensity: 0.5 };
-    },
-  ),
-  modePreset(
-    "cinema",
-    "Cinema",
-    "cinema",
-    "Palco amplo, LFE reforçado e diálogos centralizados.",
-    (p) => {
-      p.eqDb = [2.5, 2, 1, 0, -0.5, 0, 1, 1.5, 1, 0];
-      p.bass = { enabled: true, intensity: 0.5, cutoffHz: 75, harmonics: 0.4 };
-      p.spatial = { mode: "surround", width: 1.1, room: 0.5 };
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -20,
-        ratio: 2.2,
-        attackMs: 15,
-        releaseMs: 200,
-        kneeDb: 6,
-        makeupDb: 2,
-      };
-      p.loudness = { enabled: true, intensity: 0.4 };
-    },
-  ),
-  modePreset(
-    "gaming",
-    "Jogos",
-    "gaming",
-    "Passos nítidos, palco amplo e dinâmica controlada.",
-    (p) => {
-      p.eqDb = [0.5, 0.5, 0, -1, 0, 1, 2, 1.5, 0.5, 0];
-      p.bass = { enabled: true, intensity: 0.25, cutoffHz: 85, harmonics: 0.2 };
-      p.spatial = { mode: "surround", width: 1.3, room: 0.25 };
-      p.crossfeed = { enabled: true, amount: 0.15, delayMs: 0.3 };
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -22,
-        ratio: 2,
-        attackMs: 5,
-        releaseMs: 100,
-        kneeDb: 6,
-        makeupDb: 2,
-      };
-      p.limiter.ceilingDb = -0.5;
-    },
-  ),
-  modePreset(
-    "podcast",
-    "Podcast",
-    "podcast",
-    "Voz à frente, graves reduzidos e nível consistente.",
-    (p) => {
-      p.eqDb = [-4, -3, -2, -1, 0, 1, 2.5, 2, 1, 0];
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -24,
-        ratio: 3,
-        attackMs: 8,
-        releaseMs: 120,
-        kneeDb: 6,
-        makeupDb: 4,
-      };
-      p.loudness = { enabled: true, intensity: 0.7 };
-    },
-  ),
-  modePreset(
-    "vocal",
-    "Vocal",
-    "vocal",
-    "Presença e clareza para voz, mantendo os extremos suaves.",
-    (p) => {
-      p.eqDb = [-2, -1.5, -0.5, 0, 0.8, 1.5, 2.5, 2, 1, 0.5];
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -20,
-        ratio: 2,
-        attackMs: 12,
-        releaseMs: 160,
-        kneeDb: 3,
-        makeupDb: 1.5,
-      };
-      p.loudness = { enabled: true, intensity: 0.5 };
-    },
-  ),
-  modePreset("flat", "Flat", "flat", "Sem equalização ou realce.", () => {}),
-  modePreset(
-    "bass",
-    "Bass",
-    "bass",
-    "Subwoofer virtual e graves amplos.",
-    (p) => {
-      p.eqDb = [4, 3.5, 2, 0, -1, 0, 0.5, 0.5, 0, 0];
-      p.bass = { enabled: true, intensity: 0.85, cutoffHz: 70, harmonics: 0.35 };
-      p.loudness = { enabled: true, intensity: 0.4 };
-    },
-  ),
-  modePreset(
-    "night",
-    "Noturno",
-    "night",
-    "Faixa dinâmica comprimida para volume baixo.",
-    (p) => {
-      p.eqDb = [-1, -0.5, 0, 0.5, 0.5, 0.5, 0, 0, 0, 0];
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -30,
-        ratio: 5,
-        attackMs: 5,
-        releaseMs: 250,
-        kneeDb: 6,
-        makeupDb: 6,
-      };
-      p.loudness = { enabled: true, intensity: 0.9 };
-      p.limiter.ceilingDb = -1;
-    },
-  ),
-  modePreset(
-    "protection",
-    "Proteção",
-    "protection",
-    "Graves contidos, dinâmica controlada e teto de pico baixo para sessões longas.",
-    (p) => {
-      p.preampDb = -2;
-      p.compressor = {
-        enabled: true,
-        thresholdDb: -24,
-        ratio: 3,
-        attackMs: 5,
-        releaseMs: 250,
-        kneeDb: 6,
-        makeupDb: 0,
-      };
-      p.limiter.ceilingDb = -3;
-    },
-  ),
-  headphonePreset("hp-sony-wh1000xm4", "Sony", "WH-1000XM4", -6, [
-    ls(105, -2.5, 0.7),
-    pk(220, 1.5, 1),
-    pk(1100, 0.8, 1.2),
-    pk(2700, 4, 1.1),
-    pk(4300, -2, 2),
-    pk(6200, -3, 1.5),
-    hs(9000, 2, 0.7),
-  ]),
-  headphonePreset("hp-sony-wh1000xm5", "Sony", "WH-1000XM5", -5, [
-    ls(100, -3, 0.7),
-    pk(250, 1, 1),
-    pk(3000, 3.5, 1.1),
-    pk(6000, -2.5, 1.8),
-    hs(10000, 1.5, 0.7),
-  ]),
-  headphonePreset("hp-bose-qc45", "Bose", "QuietComfort 45", -4, [
-    ls(120, -1.5, 0.7),
-    pk(350, 1, 1),
-    pk(2300, 3, 1.2),
-    pk(5000, -1.5, 1.5),
-    hs(9000, 1, 0.7),
-  ]),
-  headphonePreset("hp-bose-qc-ultra", "Bose", "QuietComfort Ultra", -5, [
-    ls(90, -2, 0.7),
-    pk(400, 1.5, 1),
-    pk(2800, 2.5, 1.2),
-    pk(5500, -2, 1.5),
-    hs(10000, 1.5, 0.7),
-  ]),
-  headphonePreset("hp-sennheiser-hd600", "Sennheiser", "HD 600", -2, [
-    ls(60, 2, 0.7),
-    pk(3500, -1.5, 1.5),
-    pk(5500, 1, 2),
-    hs(10000, -1, 0.7),
-  ]),
-  headphonePreset("hp-sennheiser-momentum4", "Sennheiser", "Momentum 4", -3, [
-    ls(110, 1.5, 0.7),
-    pk(900, -1, 1.2),
-    pk(2600, 2, 1.2),
-    pk(6000, -1.5, 1.5),
-    hs(9500, 1, 0.7),
-  ]),
-  headphonePreset("hp-apple-airpods-max", "Apple", "AirPods Max", -2.5, [
-    ls(90, 1, 0.7),
-    pk(400, -0.5, 1),
-    pk(2500, 1.5, 1.2),
-    pk(5500, -1, 1.5),
-    hs(9000, 0.5, 0.7),
-  ]),
-  headphonePreset("hp-apple-airpods-pro2", "Apple", "AirPods Pro (2ª geração)", -3, [
-    ls(100, -1, 0.7),
-    pk(200, 1, 1),
-    pk(3000, 2, 1.2),
-    pk(6000, -1, 1.5),
-    hs(9000, 0.5, 0.7),
-  ]),
-  headphonePreset("hp-jbl-tune770nc", "JBL", "Tune 770NC", -3, [
-    ls(100, 2, 0.7),
-    pk(500, -1, 1),
-    pk(2500, 1.5, 1.2),
-    hs(8000, 1.5, 0.7),
-  ]),
-  headphonePreset("hp-samsung-buds2-pro", "Samsung", "Galaxy Buds2 Pro", -4, [
-    ls(90, -2.5, 0.7),
-    pk(300, 1, 1),
-    pk(2800, 2, 1.2),
-    pk(5500, -1.5, 1.5),
-    hs(10000, 1, 0.7),
-  ]),
-  headphonePreset("hp-ath-m50x", "Audio-Technica", "ATH-M50x", -3.5, [
-    ls(100, -2, 0.7),
-    pk(300, 2, 1),
-    pk(4000, -3, 2),
-    pk(9000, 2, 1.2),
-  ]),
-  headphonePreset("hp-beyerdynamic-dt770", "Beyerdynamic", "DT 770 Pro", -4, [
-    ls(80, 2, 0.7),
-    pk(250, -1, 1),
-    pk(6000, -3, 2),
-    pk(10000, -4, 1.2),
-  ]),
-];
 
 const mockDevices: DeviceList = {
   inputs: [
@@ -381,6 +66,7 @@ interface MockState {
   settings: Settings;
   presets: Preset[];
   activePresetId: string | null;
+  activeHeadphoneId: string | null;
   devices: DeviceList;
   engine: EngineInfo;
   warnings: string[];
@@ -411,6 +97,7 @@ const state: MockState = {
   settings: defaultSettings(),
   presets: clone(MOCK_PRESETS),
   activePresetId: "music",
+  activeHeadphoneId: null,
   devices: clone(mockDevices),
   engine: initialEngine(),
   warnings: [],
@@ -425,7 +112,32 @@ function shapingEqual(a: ProcessingParams, b: ProcessingParams): boolean {
   right.bypass = false;
   left.earProfile = { enabled: false, preampDb: 0, filters: [] };
   right.earProfile = { enabled: false, preampDb: 0, filters: [] };
+  left.autoEq = { enabled: true, preampDb: 0, filters: [], name: null };
+  right.autoEq = { enabled: true, preampDb: 0, filters: [], name: null };
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function headphoneEqual(a: ProcessingParams, b: ProcessingParams): boolean {
+  const left = clone(a.autoEq);
+  const right = clone(b.autoEq);
+  left.preampDb = 0;
+  right.preampDb = 0;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function syncActiveLayers() {
+  if (state.activePresetId) {
+    const preset = state.presets.find((p) => p.id === state.activePresetId);
+    if (!preset || !shapingEqual(preset.params, state.params)) {
+      state.activePresetId = null;
+    }
+  }
+  if (state.activeHeadphoneId) {
+    const preset = state.presets.find((p) => p.id === state.activeHeadphoneId);
+    if (!preset || !headphoneEqual(preset.params, state.params)) {
+      state.activeHeadphoneId = null;
+    }
+  }
 }
 
 function currentView(): AppView {
@@ -434,6 +146,7 @@ function currentView(): AppView {
     settings: clone(state.settings),
     presets: clone(state.presets),
     activePresetId: state.activePresetId,
+    activeHeadphoneId: state.activeHeadphoneId,
     devices: clone(state.devices),
     engine: clone(state.engine),
     battery: null,
@@ -472,38 +185,44 @@ export const mockBackend = {
 
   setParams(params: ProcessingParams): ParamsUpdate {
     state.params = clone(params);
-    if (state.activePresetId) {
-      const preset = state.presets.find((p) => p.id === state.activePresetId);
-      if (!preset || !shapingEqual(preset.params, state.params)) {
-        state.activePresetId = null;
-      }
-    }
+    syncActiveLayers();
     emitState();
-    return { params: clone(state.params), activePresetId: state.activePresetId };
+    return {
+      params: clone(state.params),
+      activePresetId: state.activePresetId,
+      activeHeadphoneId: state.activeHeadphoneId,
+    };
   },
 
   setVolume(volume: number): ParamsUpdate {
     state.params.volume = Math.min(1, Math.max(0, volume));
     emitState();
-    return { params: clone(state.params), activePresetId: state.activePresetId };
+    return {
+      params: clone(state.params),
+      activePresetId: state.activePresetId,
+      activeHeadphoneId: state.activeHeadphoneId,
+    };
   },
 
   toggleBypass(): ParamsUpdate {
     state.params.bypass = !state.params.bypass;
     emitState();
-    return { params: clone(state.params), activePresetId: state.activePresetId };
+    return {
+      params: clone(state.params),
+      activePresetId: state.activePresetId,
+      activeHeadphoneId: state.activeHeadphoneId,
+    };
   },
 
   setSpatialMode(mode: ProcessingParams["spatial"]["mode"]): ParamsUpdate {
     state.params.spatial.mode = mode;
-    if (state.activePresetId) {
-      const preset = state.presets.find((p) => p.id === state.activePresetId);
-      if (!preset || !shapingEqual(preset.params, state.params)) {
-        state.activePresetId = null;
-      }
-    }
+    syncActiveLayers();
     emitState();
-    return { params: clone(state.params), activePresetId: state.activePresetId };
+    return {
+      params: clone(state.params),
+      activePresetId: state.activePresetId,
+      activeHeadphoneId: state.activeHeadphoneId,
+    };
   },
 
   applyPreset(id: string): AppView {
@@ -511,12 +230,21 @@ export const mockBackend = {
     if (!preset) {
       throw new Error(`Preset não encontrado: ${id}`);
     }
-    const params = clone(preset.params);
-    params.volume = state.params.volume;
-    params.bypass = state.params.bypass;
-    params.earProfile = clone(state.params.earProfile);
+    const headphone = preset.category === "headphone";
+    const params = clone(state.params);
+    if (headphone) {
+      params.autoEq = clone(preset.params.autoEq);
+      state.activeHeadphoneId = id;
+    } else {
+      const applied = clone(preset.params);
+      applied.volume = state.params.volume;
+      applied.bypass = state.params.bypass;
+      applied.earProfile = clone(state.params.earProfile);
+      applied.autoEq = clone(state.params.autoEq);
+      Object.assign(params, applied);
+      state.activePresetId = id;
+    }
     state.params = params;
-    state.activePresetId = id;
     emitState();
     return currentView();
   },
@@ -527,8 +255,10 @@ export const mockBackend = {
     params.volume = state.params.volume;
     params.bypass = false;
     params.earProfile = { enabled: false, preampDb: 0, filters: [] };
+    params.autoEq = { enabled: true, preampDb: 0, filters: [], name: null };
     state.params = params;
     state.activePresetId = "music";
+    state.activeHeadphoneId = null;
     emitState();
     return currentView();
   },
@@ -536,6 +266,7 @@ export const mockBackend = {
   savePreset(name: string): AppView {
     const params = clone(state.params);
     params.earProfile = { enabled: false, preampDb: 0, filters: [] };
+    params.autoEq = { enabled: true, preampDb: 0, filters: [], name: null };
     const preset: Preset = {
       id: `custom-${Date.now()}`,
       name: name.trim() || "Preset",
@@ -556,6 +287,9 @@ export const mockBackend = {
     state.presets = state.presets.filter((p) => !(p.id === id && !p.builtIn));
     if (state.activePresetId === id) {
       state.activePresetId = null;
+    }
+    if (state.activeHeadphoneId === id) {
+      state.activeHeadphoneId = null;
     }
     emitState();
     return currentView();

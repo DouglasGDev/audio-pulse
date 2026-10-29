@@ -1,8 +1,8 @@
 //! Data structures exchanged between the Rust backend and the webview.
 
-use serde::{Deserialize, Serialize};
 use audio_pulse_dsp::presets::Preset;
 use audio_pulse_dsp::ProcessingParams;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,6 +135,7 @@ pub struct EngineInfo {
 pub struct ParamsUpdate {
     pub params: ProcessingParams,
     pub active_preset_id: Option<String>,
+    pub active_headphone_id: Option<String>,
 }
 
 /// Battery of the wireless headset that owns the selected output endpoint.
@@ -152,6 +153,7 @@ pub struct AppView {
     pub settings: Settings,
     pub presets: Vec<Preset>,
     pub active_preset_id: Option<String>,
+    pub active_headphone_id: Option<String>,
     pub devices: DeviceList,
     pub engine: EngineInfo,
     pub battery: Option<BatteryInfo>,

@@ -163,9 +163,7 @@ pub fn choose_output_config(device: &Device) -> Result<cpal::SupportedStreamConf
         }
     }
 
-    let chosen = best
-        .map(|(cfg, _)| cfg)
-        .unwrap_or_else(|| default.clone());
+    let chosen = best.map(|(cfg, _)| cfg).unwrap_or_else(|| default.clone());
     let format = chosen.sample_format();
     if !is_supported_format(format) {
         return Err(format!(
@@ -224,11 +222,7 @@ pub fn choose_input_config(
                 *cfg.buffer_size(),
                 cfg.sample_format(),
             );
-            if best
-                .as_ref()
-                .map(|(_, s)| score > *s)
-                .unwrap_or(true)
-            {
+            if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
                 best = Some((supported, score));
             }
         }

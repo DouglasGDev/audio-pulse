@@ -27,7 +27,7 @@ mod imp {
         SP_DEVINFO_DATA,
     };
     use windows_sys::Win32::Devices::HumanInterfaceDevice::HidD_GetFeature;
-    use windows_sys::Win32::Devices::Properties::{DEVPROP_TYPE_GUID, DEVPKEY_Device_ContainerId};
+    use windows_sys::Win32::Devices::Properties::{DEVPKEY_Device_ContainerId, DEVPROP_TYPE_GUID};
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,

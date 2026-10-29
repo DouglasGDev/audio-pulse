@@ -94,7 +94,11 @@ impl VirtualSpeaker {
 
         let az = azimuth_deg.clamp(-180.0, 180.0);
         let abs_az = az.abs();
-        let effective = if abs_az > 90.0 { 180.0 - abs_az } else { abs_az };
+        let effective = if abs_az > 90.0 {
+            180.0 - abs_az
+        } else {
+            abs_az
+        };
         let radians = effective.to_radians();
         let itd_seconds = (HEAD_RADIUS / SPEED_OF_SOUND) * (radians + radians.sin());
         let itd_samples = itd_seconds * sample_rate;
@@ -119,8 +123,16 @@ impl VirtualSpeaker {
             2.5 + 9.5 * radians.sin()
         };
         let far_gain = 10f32.powf(-far_gain_db / 20.0).clamp(0.04, 1.0);
-        let pinna_freq = if self.kind == SpeakerKind::Rear { 5_400.0 } else { 7_300.0 };
-        let pinna_gain = if self.kind == SpeakerKind::Rear { -2.4 } else { -1.4 };
+        let pinna_freq = if self.kind == SpeakerKind::Rear {
+            5_400.0
+        } else {
+            7_300.0
+        };
+        let pinna_gain = if self.kind == SpeakerKind::Rear {
+            -2.4
+        } else {
+            -1.4
+        };
         self.pinna_l
             .set_peaking(sample_rate, pinna_freq, pinna_gain, 1.6);
         self.pinna_r
@@ -236,6 +248,58 @@ impl AllPass {
     }
 }
 
+/// Three early lateral reflections per ear with high-frequency damping.
+///
+/// The Schroeder tail only starts after the pre-delay plus the shortest comb
+/// (≈38 ms), so on its own it sounds like a separate reverberation instead of
+/// the room around the listener. These taps fill the 7–25 ms gap with
+/// decorrelated cues, which is what makes the image feel externalized.
+struct EarlyReflections {
+    left: [FractionalDelay; 3],
+    right: [FractionalDelay; 3],
+    damp_l: OnePole,
+    damp_r: OnePole,
+}
+
+const EARLY_TAPS_L: [(f32, f32); 3] = [(0.0071, 0.26), (0.0113, 0.19), (0.0191, 0.13)];
+const EARLY_TAPS_R: [(f32, f32); 3] = [(0.0089, 0.24), (0.0137, 0.17), (0.0233, 0.11)];
+
+impl EarlyReflections {
+    fn new(sample_rate: f32) -> Self {
+        let capacity = (0.030 * sample_rate) as usize + 16;
+        Self {
+            left: std::array::from_fn(|_| FractionalDelay::new(capacity)),
+            right: std::array::from_fn(|_| FractionalDelay::new(capacity)),
+            damp_l: OnePole::low_pass(sample_rate, 6_500.0),
+            damp_r: OnePole::low_pass(sample_rate, 6_500.0),
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32, sample_rate: f32) -> (f32, f32) {
+        let mut left = 0.0;
+        let mut right = 0.0;
+        for i in 0..3 {
+            let (delay_l, gain_l) = EARLY_TAPS_L[i];
+            let (delay_r, gain_r) = EARLY_TAPS_R[i];
+            left += self.left[i].write_read(input, delay_l * sample_rate) * gain_l;
+            right += self.right[i].write_read(input, delay_r * sample_rate) * gain_r;
+        }
+        (self.damp_l.process(left), self.damp_r.process(right))
+    }
+
+    fn reset(&mut self) {
+        for delay in &mut self.left {
+            delay.reset();
+        }
+        for delay in &mut self.right {
+            delay.reset();
+        }
+        self.damp_l.reset();
+        self.damp_r.reset();
+    }
+}
+
 struct StereoReverb {
     pre_l: FractionalDelay,
     pre_r: FractionalDelay,
@@ -263,8 +327,14 @@ impl StereoReverb {
                 Comb::new(sample_rate, 40.3, 0.64),
                 Comb::new(sample_rate, 45.1, 0.62),
             ],
-            aps_l: vec![AllPass::new(sample_rate, 5.0), AllPass::new(sample_rate, 1.7)],
-            aps_r: vec![AllPass::new(sample_rate, 4.3), AllPass::new(sample_rate, 1.3)],
+            aps_l: vec![
+                AllPass::new(sample_rate, 5.0),
+                AllPass::new(sample_rate, 1.7),
+            ],
+            aps_r: vec![
+                AllPass::new(sample_rate, 4.3),
+                AllPass::new(sample_rate, 1.3),
+            ],
         }
     }
 
@@ -376,10 +446,8 @@ impl HrtfTracker {
 
         // A hard-panned source gives |mid| = |side|; a centred one gives
         // |side| ≈ 0. Doubling keeps the normalised lateral factor in 0..1.
-        let lateral =
-            (2.0 * self.side_env / (self.mid_env + self.side_env + 1e-6)).clamp(0.0, 1.0);
-        let target = (HRTF_MIN_SPREAD_DEG
-            + (HRTF_MAX_SPREAD_DEG - HRTF_MIN_SPREAD_DEG) * lateral)
+        let lateral = (2.0 * self.side_env / (self.mid_env + self.side_env + 1e-6)).clamp(0.0, 1.0);
+        let target = (HRTF_MIN_SPREAD_DEG + (HRTF_MAX_SPREAD_DEG - HRTF_MIN_SPREAD_DEG) * lateral)
             * width.clamp(0.0, 1.5);
         let target = target.clamp(0.0, 88.0);
         let coeff = if target > self.spread_deg {
@@ -396,7 +464,9 @@ pub struct SpatialStage {
     sample_rate: f32,
     mode: SpatialMode,
     width: f32,
-    room: f32,
+    room_current: f32,
+    room_target: f32,
+    room_coeff: f32,
     last_mode: SpatialMode,
     last_width: f32,
     speakers: [VirtualSpeaker; 8],
@@ -405,8 +475,8 @@ pub struct SpatialStage {
     rear_l: FractionalDelay,
     rear_r: FractionalDelay,
     lfe_lp: Biquad,
+    early: EarlyReflections,
     reverb: StereoReverb,
-    wet_scale: f32,
     hrtf: HrtfTracker,
 }
 
@@ -429,7 +499,9 @@ impl SpatialStage {
             sample_rate,
             mode: SpatialMode::Off,
             width: 1.0,
-            room: 0.35,
+            room_current: 0.35,
+            room_target: 0.35,
+            room_coeff: 1.0 - (-1.0 / (0.020 * sample_rate.max(8_000.0))).exp(),
             last_mode: SpatialMode::Off,
             last_width: 1.0,
             speakers,
@@ -438,18 +510,18 @@ impl SpatialStage {
             rear_l: FractionalDelay::new((0.040 * sample_rate) as usize + 16),
             rear_r: FractionalDelay::new((0.040 * sample_rate) as usize + 16),
             lfe_lp: Biquad::low_pass(sample_rate, 90.0, 0.707),
+            early: EarlyReflections::new(sample_rate),
             reverb: StereoReverb::new(sample_rate),
-            wet_scale: 0.0,
             hrtf: HrtfTracker::new(sample_rate),
         };
         stage.set_params(SpatialParams::default(), sample_rate);
+        stage.room_current = stage.room_target;
         stage
     }
 
     pub fn set_params(&mut self, params: SpatialParams, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.room = params.room.clamp(0.0, 1.0);
-        self.wet_scale = self.room * 0.85;
+        self.room_target = params.room.clamp(0.0, 1.0);
         let mode_changed = params.mode != self.last_mode;
         let width_changed = (params.width - self.last_width).abs() > 0.002;
         if !mode_changed && !width_changed && params.mode == self.mode {
@@ -462,6 +534,7 @@ impl SpatialStage {
 
         if mode_changed {
             self.reverb.reset();
+            self.early.reset();
             self.side_l.reset();
             self.side_r.reset();
             self.rear_l.reset();
@@ -496,8 +569,7 @@ impl SpatialStage {
                     (true, level, speaker.base_azimuth)
                 }
             };
-            let az = if matches!(speaker.kind, SpeakerKind::Lfe) || self.mode == SpatialMode::Hrtf
-            {
+            let az = if matches!(speaker.kind, SpeakerKind::Lfe) || self.mode == SpatialMode::Hrtf {
                 // HRTF already folds the width slider into its tracked spread.
                 az
             } else {
@@ -540,14 +612,8 @@ impl SpatialStage {
                 channels[1] = (r - mid * 0.33) * 0.9;
                 channels[2] = center;
                 channels[3] = self.lfe_lp.process(mid) * 0.4;
-                channels[4] = self
-                    .side_l
-                    .write_read(side, 0.009 * sr)
-                    * 0.8;
-                channels[5] = self
-                    .side_r
-                    .write_read(-side, 0.012 * sr)
-                    * 0.8;
+                channels[4] = self.side_l.write_read(side, 0.009 * sr) * 0.8;
+                channels[5] = self.side_r.write_read(-side, 0.012 * sr) * 0.8;
                 channels[6] = self.rear_l.write_read(side, 0.019 * sr) * 0.55;
                 channels[7] = self.rear_r.write_read(-side, 0.023 * sr) * 0.55;
                 ambient = side * 0.42 + mid * 0.08;
@@ -569,10 +635,18 @@ impl SpatialStage {
             out_r += sr;
         }
 
-        if self.room > 0.001 {
-            let (wet_l, wet_r) = self.reverb.process(ambient, 0.008 * self.sample_rate);
-            out_l += wet_l * self.wet_scale;
-            out_r += wet_r * self.wet_scale;
+        self.room_current += (self.room_target - self.room_current) * self.room_coeff;
+        if self.room_current > 0.001 {
+            let sr = self.sample_rate;
+            let (early_l, early_r) = self.early.process(ambient, sr);
+            let early_gain = self.room_current * 0.9;
+            out_l += early_l * early_gain;
+            out_r += early_r * early_gain;
+
+            let (wet_l, wet_r) = self.reverb.process(ambient, 0.008 * sr);
+            let wet_gain = self.room_current * 0.85;
+            out_l += wet_l * wet_gain;
+            out_r += wet_r * wet_gain;
         }
 
         let trim = match self.mode {
@@ -597,8 +671,10 @@ impl SpatialStage {
         self.rear_l.reset();
         self.rear_r.reset();
         self.lfe_lp.reset();
+        self.early.reset();
         self.reverb.reset();
         self.hrtf.reset(self.width);
+        self.room_current = self.room_target;
     }
 }
 
@@ -677,6 +753,44 @@ mod tests {
             stage.hrtf.spread_deg < 28.0,
             "mono opened the image to {} deg",
             stage.hrtf.spread_deg
+        );
+    }
+
+    #[test]
+    fn room_adds_early_reflections_before_the_reverb_tail() {
+        let sr = 48_000.0;
+        let early_energy = |room: f32| {
+            let mut stage = SpatialStage::new(sr);
+            stage.set_params(
+                SpatialParams {
+                    mode: SpatialMode::Binaural,
+                    width: 1.0,
+                    room,
+                },
+                sr,
+            );
+            stage.room_current = room;
+            let from = (0.004 * sr) as usize;
+            let to = (0.026 * sr) as usize;
+            let mut energy = 0.0f64;
+            for i in 0..to {
+                let (l, r) = stage.process(if i == 0 { 1.0 } else { 0.0 }, 0.0);
+                assert!(l.is_finite() && r.is_finite());
+                if i >= from {
+                    energy += (l as f64).powi(2) + (r as f64).powi(2);
+                }
+            }
+            energy
+        };
+        let dry = early_energy(0.0);
+        let roomy = early_energy(0.6);
+        assert!(
+            dry < 1e-9,
+            "a roomless stage produced early reflections: {dry}"
+        );
+        assert!(
+            roomy > 1e-5,
+            "the room did not fill the 4–26 ms gap: {roomy}"
         );
     }
 

@@ -2,10 +2,13 @@
 //!
 //! Every 20 ms the stage measures five octave bands from an overlapped FFT,
 //! compares their energy against a gentle program-material reference, and
-//! trims each band by at most ±3 dB. The reference is not flat: it expects
-//! roughly +2 dB of low-end and -2 dB of top-end energy relative to the
-//! program's own median, which is where most music and cinema sit. That keeps
-//! the controller from brightening every mix the way a flat target would.
+//! trims each band by at most ±3 dB. Each channel is transformed separately and
+//! their per-band powers are summed, so hard-panned and anti-phase material
+//! still counts; a mono sum would cancel side content and freeze the
+//! controller. The reference is not flat: it expects roughly +2 dB of low-end
+//! and -2 dB of top-end energy relative to the program's own median, which is
+//! where most music and cinema sit. That keeps the controller from brightening
+//! every mix the way a flat target would.
 //!
 //! The controller is deterministic, not a neural network: a deadband avoids
 //! chasing noise, an asymmetric smoothing (fast attack, slower release) keeps
@@ -48,7 +51,8 @@ pub struct AdaptiveEqStage {
     window_sum: f32,
     buffer: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
-    accum: Vec<f32>,
+    accum_l: Vec<f32>,
+    accum_r: Vec<f32>,
     pos: usize,
     hop: usize,
     fft_size: usize,
@@ -69,8 +73,7 @@ impl AdaptiveEqStage {
         let fft = planner.plan_fft_forward(fft_size);
         let window: Vec<f32> = (0..fft_size)
             .map(|n| {
-                0.5 - 0.5
-                    * (2.0 * std::f32::consts::PI * n as f32 / (fft_size - 1) as f32).cos()
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / (fft_size - 1) as f32).cos()
             })
             .collect();
         let window_sum = window.iter().sum::<f32>().max(1.0);
@@ -94,7 +97,8 @@ impl AdaptiveEqStage {
             window_sum,
             buffer: vec![Complex::new(0.0, 0.0); fft_size],
             scratch: vec![Complex::new(0.0, 0.0); scratch_len],
-            accum: vec![0.0; fft_size],
+            accum_l: vec![0.0; fft_size],
+            accum_r: vec![0.0; fft_size],
             pos: 0,
             hop,
             fft_size,
@@ -125,7 +129,7 @@ impl AdaptiveEqStage {
         }
 
         self.peak = self.peak.max(l.abs()).max(r.abs());
-        self.push((l + r) * 0.5);
+        self.push(l, r);
 
         let mut left = l;
         let mut right = r;
@@ -136,35 +140,60 @@ impl AdaptiveEqStage {
         (left, right)
     }
 
-    fn push(&mut self, mono: f32) {
-        self.accum[self.pos] = mono;
+    fn push(&mut self, l: f32, r: f32) {
+        self.accum_l[self.pos] = l;
+        self.accum_r[self.pos] = r;
         self.pos += 1;
         if self.pos >= self.fft_size {
             self.analyze();
-            self.accum.copy_within(self.hop..self.fft_size, 0);
+            self.accum_l.copy_within(self.hop..self.fft_size, 0);
+            self.accum_r.copy_within(self.hop..self.fft_size, 0);
             self.pos = self.fft_size - self.hop;
         }
     }
 
-    fn analyze(&mut self) {
-        for i in 0..self.fft_size {
-            self.buffer[i] = Complex::new(self.accum[i] * self.window[i], 0.0);
+    /// Windowed band power of one channel. The FFT buffer and scratch are
+    /// reused, so measuring both channels doubles the transform count but not
+    /// the memory.
+    fn channel_power(&mut self, right: bool) -> [f32; ADAPTIVE_EQ_BANDS] {
+        let samples = if right { &self.accum_r } else { &self.accum_l };
+        for ((slot, &sample), &window) in self
+            .buffer
+            .iter_mut()
+            .zip(samples.iter())
+            .zip(self.window.iter())
+        {
+            *slot = Complex::new(sample * window, 0.0);
         }
         self.fft
             .process_with_scratch(&mut self.buffer, &mut self.scratch);
 
-        let norm = 2.0 / self.window_sum;
-        let mut raw_db = [-90.0f32; ADAPTIVE_EQ_BANDS];
+        let mut power = [0.0f32; ADAPTIVE_EQ_BANDS];
         for (band, &(low, high)) in self.band_bins.iter().enumerate() {
-            let mut power = 0.0f32;
+            let mut sum = 0.0f32;
             for bin in low..high {
                 let c = self.buffer[bin];
-                power += c.re * c.re + c.im * c.im;
+                sum += c.re * c.re + c.im * c.im;
             }
+            power[band] = sum;
+        }
+        power
+    }
+
+    fn analyze(&mut self) {
+        let power_l = self.channel_power(false);
+        let power_r = self.channel_power(true);
+
+        let norm = 2.0 / self.window_sum;
+        let mut raw_db = [-90.0f32; ADAPTIVE_EQ_BANDS];
+        for (band, raw) in raw_db.iter_mut().enumerate() {
             // Summing the bins integrates each octave band's energy, so a
-            // pink-ish program reads roughly flat across the five bands.
-            let amplitude = (power.sqrt() * norm).max(1e-9);
-            raw_db[band] = 20.0 * amplitude.log10();
+            // pink-ish program reads roughly flat across the five bands. The
+            // two channels contribute their power, which keeps correlated
+            // content at roughly the same reading as the old mono sum while
+            // side-only content no longer disappears.
+            let amplitude = ((power_l[band] + power_r[band]).sqrt() * norm).max(1e-9);
+            *raw = 20.0 * amplitude.log10();
         }
 
         if !self.has_analysis {
@@ -264,7 +293,8 @@ impl AdaptiveEqStage {
     }
 
     fn reset_adaptation(&mut self) {
-        self.accum.fill(0.0);
+        self.accum_l.fill(0.0);
+        self.accum_r.fill(0.0);
         self.pos = 0;
         self.peak = 0.0;
         self.has_analysis = false;
@@ -330,12 +360,30 @@ mod tests {
             "low band should be trimmed, got {:?}",
             gains
         );
+        assert!(gains[2] > 0.3, "mid band should be lifted, got {:?}", gains);
+        assert!(gains
+            .iter()
+            .all(|gain| gain.abs() <= ADAPTIVE_EQ_MAX_DB + 0.01));
+    }
+
+    #[test]
+    fn anti_phase_program_is_still_analyzed() {
+        let mut stage = enabled_stage();
+        feed_sine(&mut stage, 1_000.0, 0.12, 1.5);
+        let sr = 48_000.0;
+        for i in 0..48_000 * 3 {
+            let bass = 0.5 * (2.0 * std::f32::consts::PI * 80.0 * i as f32 / sr).sin();
+            let mid = 0.12 * (2.0 * std::f32::consts::PI * 1_000.0 * i as f32 / sr).sin();
+            // Pure side content: the mono sum is silent.
+            stage.process(bass + mid, -(bass + mid));
+        }
+        let gains = stage.gains_db();
         assert!(
-            gains[2] > 0.3,
-            "mid band should be lifted, got {:?}",
+            gains[0] < -1.5,
+            "low band should be trimmed, got {:?}",
             gains
         );
-        assert!(gains.iter().all(|gain| gain.abs() <= ADAPTIVE_EQ_MAX_DB + 0.01));
+        assert!(gains[2] > 0.3, "mid band should be lifted, got {:?}", gains);
     }
 
     #[test]

@@ -28,7 +28,9 @@ impl SpectrumAnalyzer {
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(FFT_SIZE);
         let window: Vec<f32> = (0..FFT_SIZE)
-            .map(|n| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / (FFT_SIZE - 1) as f32).cos())
+            .map(|n| {
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / (FFT_SIZE - 1) as f32).cos()
+            })
             .collect();
         let window_sum = window.iter().sum::<f32>();
         let scratch_len = fft.get_inplace_scratch_len().max(1);
@@ -75,7 +77,8 @@ impl SpectrumAnalyzer {
         for i in 0..FFT_SIZE {
             self.buffer[i] = Complex::new(self.accum[i] * self.window[i], 0.0);
         }
-        self.fft.process_with_scratch(&mut self.buffer, &mut self.scratch);
+        self.fft
+            .process_with_scratch(&mut self.buffer, &mut self.scratch);
 
         let norm = 2.0 / self.window_sum;
         for (band, &(low, high)) in self.band_ranges.iter().enumerate() {
@@ -164,7 +167,8 @@ mod tests {
         let max_band = (0..SPECTRUM_BANDS)
             .max_by(|&a, &b| bands[a].partial_cmp(&bands[b]).unwrap())
             .unwrap();
-        let center = 30.0 * (18_000.0f32 / 30.0).powf((max_band as f32 + 0.5) / SPECTRUM_BANDS as f32);
+        let center =
+            30.0 * (18_000.0f32 / 30.0).powf((max_band as f32 + 0.5) / SPECTRUM_BANDS as f32);
         assert!(
             (center - 1_000.0).abs() / 1_000.0 < 0.5,
             "peak band {max_band} center {center}"

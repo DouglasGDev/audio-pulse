@@ -1,16 +1,29 @@
-//! Built-in presets: mix modes and headphone reference corrections.
+//! Built-in presets: listening modes and measured headphone corrections.
 //!
-//! The headphone corrections are Audio Pulse reference curves, not
-//! laboratory measurements. Every profile uses the same parametric AutoEQ
-//! filter model, so measured profiles exported as `ParametricEQ.txt` can be
-//! imported at runtime and behave identically.
+//! Headphone corrections use the AutoEQ parametric model (MIT License) and are
+//! computed from public measurements published by Rtings and oratory1990.
+//! They are compensation targets for the listed model, not measurements of
+//! the user's own unit: fit, earcup sealing and unit variation still change the
+//! result. Any measured AutoEQ or OPRA profile can also be imported at runtime
+//! and behaves exactly like these built-ins.
+
+// Filter Q factors such as 3.14 are data from the published corrections, not π.
+#![allow(clippy::approx_constant)]
 
 use serde::{Deserialize, Serialize};
 
+use crate::bass::BASS_SHELF_MAX_DB;
+use crate::biquad::Biquad;
+use crate::equalizer::EQ_Q;
 use crate::params::{
     AutoEqFilter, AutoEqParams, BassParams, CompressorParams, CrossfeedParams, FilterKind,
-    LimiterParams, LoudnessParams, ProcessingParams, SpatialMode, SpatialParams,
+    LimiterParams, LoudnessParams, ProcessingParams, SpatialMode, SpatialParams, EQ_FREQUENCIES,
 };
+
+/// Boost a mode may keep before the preamp compensates it. Without an
+/// allowance every mode would be noticeably quieter than Flat at the same
+/// Windows volume.
+pub const PRESET_HEADROOM_ALLOWANCE_DB: f32 = 3.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -20,6 +33,8 @@ pub enum PresetCategory {
     Gaming,
     Podcast,
     Vocal,
+    Clarity,
+    Immersive,
     Flat,
     Bass,
     Night,
@@ -68,6 +83,42 @@ fn hs(freq: f32, gain_db: f32, q: f32) -> AutoEqFilter {
     }
 }
 
+/// Largest static gain the graphic EQ cascade, the tone controls and the bass
+/// shelf can add, in dB, sampled on a log grid at 48 kHz.
+///
+/// This runs while presets are built (or imported), never in the audio thread.
+/// It is what lets a mode ship with a preamp that keeps its boosts out of the
+/// limiter instead of letting the limiter ride the curve permanently.
+fn max_static_boost_db(params: &ProcessingParams) -> f32 {
+    const SR: f32 = 48_000.0;
+    let eq: Vec<Biquad> = EQ_FREQUENCIES
+        .iter()
+        .enumerate()
+        .map(|(index, &freq)| Biquad::peaking(SR, freq, params.eq_db[index], EQ_Q))
+        .collect();
+    let shelf = (params.bass.enabled && params.bass.intensity > 0.0001).then(|| {
+        Biquad::low_shelf(
+            SR,
+            params.bass.cutoff_hz.clamp(30.0, 250.0),
+            BASS_SHELF_MAX_DB * params.bass.intensity,
+            0.707,
+        )
+    });
+    let mut peak = 0.0f32;
+    let mut freq = 20.0f32;
+    while freq < 20_000.0 {
+        let mut gain: f32 = eq.iter().map(|filter| filter.magnitude_db(freq, SR)).sum();
+        if let Some(shelf) = &shelf {
+            gain += shelf.magnitude_db(freq, SR);
+        }
+        peak = peak.max(gain);
+        freq *= 1.03;
+    }
+    // The tone filters overlap the EQ grid only partially; adding both positive
+    // gains is conservative, and presets currently leave tone at zero.
+    peak + params.tone.mid_db.max(0.0) + params.tone.treble_db.max(0.0)
+}
+
 fn mode(
     id: &str,
     name: &str,
@@ -78,6 +129,8 @@ fn mode(
     let mut params = ProcessingParams::default();
     params.limiter.enabled = true;
     configure(&mut params);
+    let headroom = (max_static_boost_db(&params) - PRESET_HEADROOM_ALLOWANCE_DB).max(0.0);
+    params.preamp_db = (params.preamp_db - headroom).clamp(-24.0, 12.0);
     Preset {
         id: id.into(),
         name: name.into(),
@@ -94,6 +147,7 @@ fn headphone(
     id: &str,
     brand: &str,
     model: &str,
+    source: &str,
     preamp_db: f32,
     filters: Vec<AutoEqFilter>,
 ) -> Preset {
@@ -102,6 +156,7 @@ fn headphone(
             enabled: true,
             preamp_db,
             filters,
+            name: None,
         },
         limiter: LimiterParams {
             enabled: true,
@@ -113,7 +168,10 @@ fn headphone(
         id: id.into(),
         name: format!("{brand} {model}"),
         category: PresetCategory::Headphone,
-        description: "Curva de referência Audio Pulse. Importe um perfil AutoEQ medido para ajuste específico.".into(),
+        description: format!(
+            "Correção medida via AutoEQ ({source}). Alvo de compensação: o resultado varia \
+             com a vedação, a unidade e o encaixe."
+        ),
         brand: Some(brand.into()),
         model: Some(model.into()),
         built_in: true,
@@ -168,6 +226,7 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 200.0,
                     knee_db: 6.0,
                     makeup_db: 2.0,
+                    ..Default::default()
                 };
                 p.loudness = LoudnessParams {
                     enabled: true,
@@ -206,8 +265,34 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 100.0,
                     knee_db: 6.0,
                     makeup_db: 2.0,
+                    ..Default::default()
                 };
                 p.limiter.ceiling_db = -0.5;
+            },
+        ),
+        mode(
+            "competitive",
+            "Competitivo",
+            PresetCategory::Gaming,
+            "Passos e direções em primeiro plano: graves contidos, presença realçada e reflexões mínimas.",
+            |p| {
+                p.eq_db = [-3.0, -2.0, -1.0, -0.5, 0.0, 1.0, 2.5, 3.0, 1.5, 0.0];
+                p.spatial = SpatialParams {
+                    mode: SpatialMode::Hrtf,
+                    width: 1.1,
+                    room: 0.1,
+                };
+                p.compressor = CompressorParams {
+                    enabled: true,
+                    threshold_db: -26.0,
+                    ratio: 2.5,
+                    attack_ms: 3.0,
+                    release_ms: 90.0,
+                    knee_db: 4.0,
+                    makeup_db: 1.0,
+                    ..Default::default()
+                };
+                p.limiter.ceiling_db = -1.0;
             },
         ),
         mode(
@@ -225,6 +310,7 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 120.0,
                     knee_db: 6.0,
                     makeup_db: 4.0,
+                    ..Default::default()
                 };
                 p.loudness = LoudnessParams {
                     enabled: true,
@@ -247,10 +333,48 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 160.0,
                     knee_db: 3.0,
                     makeup_db: 1.5,
+                    ..Default::default()
                 };
                 p.loudness = LoudnessParams {
                     enabled: true,
                     intensity: 0.5,
+                };
+            },
+        ),
+        mode(
+            "clarity",
+            "Clareza",
+            PresetCategory::Clarity,
+            "Detalhes e articulação em destaque, com médios-graves limpos e sem compressão pesada.",
+            |p| {
+                p.eq_db = [0.0, -0.5, -1.5, -1.0, 0.0, 0.5, 1.5, 2.5, 2.0, 1.0];
+                p.loudness = LoudnessParams {
+                    enabled: true,
+                    intensity: 0.35,
+                };
+            },
+        ),
+        mode(
+            "immersive",
+            "Imersivo",
+            PresetCategory::Immersive,
+            "Palco amplo com reflexões e ambiência para filmes, séries e trilhas.",
+            |p| {
+                p.eq_db = [1.5, 1.2, 0.5, 0.0, -0.3, 0.0, 0.8, 1.2, 1.0, 0.5];
+                p.bass = BassParams {
+                    enabled: true,
+                    intensity: 0.35,
+                    cutoff_hz: 80.0,
+                    harmonics: 0.25,
+                };
+                p.spatial = SpatialParams {
+                    mode: SpatialMode::Surround,
+                    width: 1.25,
+                    room: 0.65,
+                };
+                p.loudness = LoudnessParams {
+                    enabled: true,
+                    intensity: 0.45,
                 };
             },
         ),
@@ -295,6 +419,7 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 250.0,
                     knee_db: 6.0,
                     makeup_db: 6.0,
+                    ..Default::default()
                 };
                 p.loudness = LoudnessParams {
                     enabled: true,
@@ -318,6 +443,10 @@ fn mode_presets() -> Vec<Preset> {
                     release_ms: 250.0,
                     knee_db: 6.0,
                     makeup_db: 0.0,
+                    // This mode exists to control the whole spectrum evenly;
+                    // the bass-insensitive sidechain would leave the sub-bass
+                    // louder than the mids.
+                    sidechain_hpf: false,
                 };
                 p.loud_sound_reduction.enabled = true;
                 p.limiter.ceiling_db = -3.0;
@@ -329,157 +458,383 @@ fn mode_presets() -> Vec<Preset> {
 fn headphone_presets() -> Vec<Preset> {
     vec![
         headphone(
-            "hp-sony-wh1000xm4",
-            "Sony",
-            "WH-1000XM4",
-            -6.0,
+            "hp-jbl-quantum-100",
+            "JBL",
+            "Quantum 100",
+            "AutoEQ · Rtings HMS II.3",
+            -6.6,
             vec![
-                ls(105.0, -2.5, 0.70),
-                pk(220.0, 1.5, 1.00),
-                pk(1_100.0, 0.8, 1.20),
-                pk(2_700.0, 4.0, 1.10),
-                pk(4_300.0, -2.0, 2.00),
-                pk(6_200.0, -3.0, 1.50),
-                hs(9_000.0, 2.0, 0.70),
+                ls(105.0, 1.7, 0.70),
+                pk(192.0, -7.3, 0.73),
+                pk(1660.0, 3.7, 0.18),
+                pk(50.0, 3.0, 0.91),
+                pk(7901.0, -8.6, 1.68),
+                hs(10000.0, -3.5, 0.70),
+                pk(4052.0, 5.0, 3.59),
+                pk(2856.0, -4.3, 4.23),
+                pk(552.0, 3.3, 3.18),
+                pk(779.0, -3.3, 3.14),
             ],
         ),
         headphone(
-            "hp-sony-wh1000xm5",
-            "Sony",
-            "WH-1000XM5",
-            -5.0,
+            "hp-jbl-quantum-400",
+            "JBL",
+            "Quantum 400",
+            "AutoEQ · Rtings HMS II.3",
+            -6.5,
             vec![
-                ls(100.0, -3.0, 0.70),
-                pk(250.0, 1.0, 1.00),
-                pk(3_000.0, 3.5, 1.10),
-                pk(6_000.0, -2.5, 1.80),
-                hs(10_000.0, 1.5, 0.70),
+                ls(105.0, 18.0, 0.70),
+                pk(8615.0, -6.4, 0.34),
+                pk(47.0, -20.0, 0.30),
+                pk(4612.0, 11.1, 1.76),
+                pk(291.0, 6.0, 0.76),
+                hs(10000.0, 0.3, 0.70),
+                pk(1580.0, 1.1, 1.42),
+                pk(2869.0, -2.7, 3.79),
+                pk(3833.0, 1.5, 4.28),
+                pk(766.0, -0.9, 2.86),
             ],
         ),
         headphone(
-            "hp-bose-qc45",
-            "Bose",
-            "QuietComfort 45",
-            -4.0,
+            "hp-jbl-quantum-800",
+            "JBL",
+            "Quantum 800",
+            "AutoEQ · Rtings HMS II.3",
+            -6.2,
             vec![
-                ls(120.0, -1.5, 0.70),
-                pk(350.0, 1.0, 1.00),
-                pk(2_300.0, 3.0, 1.20),
-                pk(5_000.0, -1.5, 1.50),
-                hs(9_000.0, 1.0, 0.70),
+                ls(105.0, 9.2, 0.70),
+                pk(10000.0, -7.5, 0.40),
+                pk(59.0, -12.1, 0.30),
+                pk(4339.0, 10.0, 1.93),
+                pk(375.0, 3.8, 0.37),
+                hs(10000.0, 3.6, 0.70),
+                pk(9190.0, -2.0, 3.27),
+                pk(1529.0, 1.6, 2.86),
+                pk(2660.0, -1.4, 3.70),
+                pk(690.0, -1.1, 3.19),
             ],
         ),
         headphone(
-            "hp-bose-qc-ultra",
-            "Bose",
-            "QuietComfort Ultra",
-            -5.0,
-            vec![
-                ls(90.0, -2.0, 0.70),
-                pk(400.0, 1.5, 1.00),
-                pk(2_800.0, 2.5, 1.20),
-                pk(5_500.0, -2.0, 1.50),
-                hs(10_000.0, 1.5, 0.70),
-            ],
-        ),
-        headphone(
-            "hp-sennheiser-hd600",
-            "Sennheiser",
-            "HD 600",
-            -2.0,
-            vec![
-                ls(60.0, 2.0, 0.70),
-                pk(3_500.0, -1.5, 1.50),
-                pk(5_500.0, 1.0, 2.00),
-                hs(10_000.0, -1.0, 0.70),
-            ],
-        ),
-        headphone(
-            "hp-sennheiser-momentum4",
-            "Sennheiser",
-            "Momentum 4",
+            "hp-jbl-quantum-one",
+            "JBL",
+            "Quantum ONE",
+            "AutoEQ · Rtings HMS II.3",
             -3.0,
             vec![
-                ls(110.0, 1.5, 0.70),
-                pk(900.0, -1.0, 1.20),
-                pk(2_600.0, 2.0, 1.20),
-                pk(6_000.0, -1.5, 1.50),
-                hs(9_500.0, 1.0, 0.70),
-            ],
-        ),
-        headphone(
-            "hp-apple-airpods-max",
-            "Apple",
-            "AirPods Max",
-            -2.5,
-            vec![
-                ls(90.0, 1.0, 0.70),
-                pk(400.0, -0.5, 1.00),
-                pk(2_500.0, 1.5, 1.20),
-                pk(5_500.0, -1.0, 1.50),
-                hs(9_000.0, 0.5, 0.70),
-            ],
-        ),
-        headphone(
-            "hp-apple-airpods-pro2",
-            "Apple",
-            "AirPods Pro (2ª geração)",
-            -3.0,
-            vec![
-                ls(100.0, -1.0, 0.70),
-                pk(200.0, 1.0, 1.00),
-                pk(3_000.0, 2.0, 1.20),
-                pk(6_000.0, -1.0, 1.50),
-                hs(9_000.0, 0.5, 0.70),
+                ls(105.0, 2.1, 0.70),
+                pk(6146.0, -2.8, 3.65),
+                pk(1338.0, 3.7, 0.76),
+                pk(2482.0, -7.0, 2.23),
+                pk(8616.0, -4.0, 2.54),
+                hs(10000.0, -1.7, 0.70),
+                pk(46.0, -1.5, 1.95),
+                pk(152.0, 1.3, 2.20),
+                pk(4404.0, 2.9, 6.00),
+                pk(371.0, 0.9, 2.51),
             ],
         ),
         headphone(
             "hp-jbl-tune770nc",
             "JBL",
             "Tune 770NC",
-            -3.0,
+            "AutoEQ · Rtings B&K 5128",
+            -2.5,
             vec![
-                ls(100.0, 2.0, 0.70),
-                pk(500.0, -1.0, 1.00),
-                pk(2_500.0, 1.5, 1.20),
-                hs(8_000.0, 1.5, 0.70),
+                ls(105.0, -3.8, 0.70),
+                pk(8989.0, -4.6, 1.76),
+                pk(1646.0, 2.9, 1.03),
+                pk(111.0, 2.9, 1.24),
+                pk(2845.0, -2.6, 2.14),
+                hs(10000.0, -1.8, 0.70),
+                pk(514.0, -2.6, 2.09),
+                pk(5044.0, 3.0, 4.22),
+                pk(806.0, 1.4, 2.84),
+                pk(6424.0, -2.3, 6.00),
+            ],
+        ),
+        headphone(
+            "hp-sony-wh1000xm4",
+            "Sony",
+            "WH-1000XM4",
+            "AutoEQ · oratory1990",
+            -6.1,
+            vec![
+                ls(105.0, -4.2, 0.70),
+                pk(143.0, -5.2, 1.10),
+                pk(2289.0, 6.1, 1.57),
+                pk(56.0, 1.2, 1.19),
+                pk(5144.0, -3.2, 6.00),
+                hs(10000.0, -1.0, 0.70),
+                pk(407.0, 1.7, 3.14),
+                pk(6715.0, 3.0, 5.99),
+                pk(1007.0, 1.0, 3.41),
+                pk(576.0, -1.2, 3.55),
+            ],
+        ),
+        headphone(
+            "hp-sony-wh1000xm5",
+            "Sony",
+            "WH-1000XM5",
+            "AutoEQ · oratory1990",
+            -6.2,
+            vec![
+                ls(105.0, -3.2, 0.70),
+                pk(2448.0, 6.9, 2.46),
+                pk(173.0, -5.6, 0.96),
+                pk(3028.0, -5.4, 2.03),
+                pk(1327.0, 3.3, 0.58),
+                hs(10000.0, 4.9, 0.70),
+                pk(6110.0, -2.3, 5.81),
+                pk(875.0, -1.2, 4.07),
+                pk(1197.0, 1.0, 3.28),
+                pk(63.0, 0.4, 2.13),
+            ],
+        ),
+        headphone(
+            "hp-bose-qc45",
+            "Bose",
+            "QuietComfort 45",
+            "AutoEQ · oratory1990",
+            -2.2,
+            vec![
+                ls(105.0, -1.4, 0.70),
+                pk(161.0, -2.2, 1.15),
+                pk(5490.0, -7.7, 2.06),
+                pk(4242.0, 3.5, 0.24),
+                pk(2328.0, -5.2, 2.15),
+                hs(10000.0, -7.0, 0.70),
+                pk(8352.0, 2.9, 1.93),
+                pk(390.0, 0.5, 2.32),
+                pk(6508.0, -1.0, 5.04),
+                pk(70.0, -0.1, 1.97),
+            ],
+        ),
+        headphone(
+            "hp-bose-qc-ultra",
+            "Bose",
+            "QuietComfort Ultra Headphones",
+            "AutoEQ · Rtings B&K 5128",
+            -2.8,
+            vec![
+                ls(105.0, -3.0, 0.70),
+                pk(5032.0, 2.8, 3.69),
+                pk(156.0, 1.5, 1.61),
+                pk(94.0, -2.4, 2.32),
+                pk(2373.0, -2.8, 5.58),
+                hs(10000.0, 2.7, 0.70),
+                pk(1633.0, 2.6, 3.51),
+                pk(491.0, -1.1, 2.50),
+                pk(2194.0, -1.0, 3.76),
+                pk(36.0, -0.5, 2.83),
+            ],
+        ),
+        headphone(
+            "hp-sennheiser-hd600",
+            "Sennheiser",
+            "HD 600",
+            "AutoEQ · oratory1990",
+            -6.3,
+            vec![
+                ls(105.0, 6.5, 0.70),
+                pk(125.0, -2.7, 0.55),
+                pk(8445.0, 3.3, 1.61),
+                pk(522.0, 0.7, 1.02),
+                pk(1298.0, -1.2, 2.14),
+                hs(10000.0, -3.1, 0.70),
+                pk(3158.0, -1.8, 3.67),
+                pk(2166.0, 0.9, 3.32),
+                pk(6639.0, 2.2, 5.82),
+                pk(5433.0, -1.2, 5.70),
+            ],
+        ),
+        headphone(
+            "hp-sennheiser-momentum4",
+            "Sennheiser",
+            "Momentum 4 Wireless",
+            "AutoEQ · oratory1990",
+            -6.4,
+            vec![
+                ls(105.0, -7.4, 0.70),
+                pk(195.0, -3.6, 1.22),
+                pk(2393.0, 6.1, 1.81),
+                pk(1726.0, 1.6, 1.71),
+                pk(2893.0, -3.2, 5.94),
+                hs(10000.0, 0.5, 0.70),
+                pk(63.0, 1.7, 2.86),
+                pk(652.0, 1.2, 2.25),
+                pk(952.0, -1.0, 3.69),
+                pk(316.0, -0.9, 3.46),
+            ],
+        ),
+        headphone(
+            "hp-apple-airpods-max",
+            "Apple",
+            "AirPods Max",
+            "AutoEQ · oratory1990",
+            -4.7,
+            vec![
+                ls(105.0, -3.0, 0.70),
+                pk(7273.0, 3.6, 2.41),
+                pk(218.0, -2.9, 1.41),
+                pk(1031.0, -3.2, 0.99),
+                pk(3185.0, 3.1, 0.56),
+                hs(10000.0, -5.5, 0.70),
+                pk(9508.0, 2.7, 2.20),
+                pk(66.0, 0.6, 1.65),
+                pk(4045.0, 2.1, 5.82),
+                pk(4834.0, -1.8, 6.00),
+            ],
+        ),
+        headphone(
+            "hp-apple-airpods-pro2",
+            "Apple",
+            "AirPods Pro 2",
+            "AutoEQ · Rtings B&K 5128",
+            -3.1,
+            vec![
+                ls(105.0, -1.5, 0.70),
+                pk(377.0, -2.5, 0.74),
+                pk(3442.0, 3.0, 0.67),
+                pk(6303.0, -3.4, 4.47),
+                pk(1339.0, 0.5, 2.65),
+                hs(10000.0, 3.1, 0.70),
+                pk(82.0, 1.0, 1.92),
+                pk(170.0, -0.6, 1.86),
+                pk(8133.0, -1.1, 2.86),
+                pk(311.0, 0.4, 3.57),
             ],
         ),
         headphone(
             "hp-samsung-buds2-pro",
             "Samsung",
             "Galaxy Buds2 Pro",
-            -4.0,
+            "AutoEQ · oratory1990",
+            -2.3,
             vec![
-                ls(90.0, -2.5, 0.70),
-                pk(300.0, 1.0, 1.00),
-                pk(2_800.0, 2.0, 1.20),
-                pk(5_500.0, -1.5, 1.50),
-                hs(10_000.0, 1.0, 0.70),
+                ls(105.0, -2.3, 0.70),
+                pk(7526.0, 2.2, 2.78),
+                pk(266.0, -0.8, 1.35),
+                pk(3426.0, -2.3, 3.70),
+                pk(64.0, 2.2, 1.18),
+                hs(10000.0, -3.8, 0.70),
+                pk(8817.0, 1.6, 2.28),
+                pk(2283.0, 1.2, 3.75),
+                pk(4955.0, -1.2, 5.11),
+                pk(977.0, 1.0, 5.18),
             ],
         ),
         headphone(
             "hp-ath-m50x",
             "Audio-Technica",
             "ATH-M50x",
-            -3.5,
+            "AutoEQ · oratory1990",
+            -3.1,
             vec![
-                ls(100.0, -2.0, 0.70),
-                pk(300.0, 2.0, 1.00),
-                pk(4_000.0, -3.0, 2.00),
-                pk(9_000.0, 2.0, 1.20),
+                ls(105.0, 0.6, 0.70),
+                pk(156.0, -5.2, 0.73),
+                pk(326.0, 5.3, 1.59),
+                pk(7077.0, 2.8, 2.22),
+                pk(3483.0, 2.1, 5.82),
+                hs(10000.0, -4.1, 0.70),
+                pk(45.0, -1.1, 1.90),
+                pk(66.0, 1.4, 3.59),
+                pk(787.0, -0.5, 1.79),
+                pk(1640.0, 0.9, 3.41),
             ],
         ),
         headphone(
             "hp-beyerdynamic-dt770",
             "Beyerdynamic",
             "DT 770 Pro",
-            -4.0,
+            "AutoEQ · oratory1990",
+            -5.1,
             vec![
-                ls(80.0, 2.0, 0.70),
-                pk(250.0, -1.0, 1.00),
-                pk(6_000.0, -3.0, 2.00),
-                pk(10_000.0, -4.0, 1.20),
+                ls(105.0, -3.0, 0.70),
+                pk(6430.0, -4.2, 0.97),
+                pk(3684.0, 6.8, 2.88),
+                pk(213.0, 3.5, 2.46),
+                pk(139.0, -3.9, 4.92),
+                hs(10000.0, -5.4, 0.70),
+                pk(93.0, 3.5, 3.00),
+                pk(9561.0, 2.3, 1.86),
+                pk(45.0, -1.3, 1.74),
+                pk(119.0, -2.1, 5.83),
+            ],
+        ),
+        headphone(
+            "hp-hyperx-cloud-2",
+            "HyperX",
+            "Cloud II",
+            "AutoEQ · oratory1990",
+            -6.4,
+            vec![
+                ls(105.0, 4.1, 0.70),
+                pk(170.0, -7.0, 1.06),
+                pk(271.0, 3.7, 0.58),
+                pk(3828.0, 5.4, 3.60),
+                pk(57.0, -4.8, 0.58),
+                hs(10000.0, -7.0, 0.70),
+                pk(8085.0, -3.0, 3.98),
+                pk(2378.0, -1.9, 2.78),
+                pk(3700.0, 1.3, 2.71),
+                pk(1123.0, 1.1, 3.29),
+            ],
+        ),
+        headphone(
+            "hp-steelseries-arctis-nova-pro",
+            "SteelSeries",
+            "Arctis Nova Pro",
+            "AutoEQ · Rtings B&K 5128",
+            -6.7,
+            vec![
+                ls(105.0, -2.2, 0.70),
+                pk(141.0, -5.7, 1.88),
+                pk(8720.0, -7.0, 0.34),
+                pk(4510.0, 11.9, 1.52),
+                pk(359.0, 4.6, 1.63),
+                hs(10000.0, 6.6, 0.70),
+                pk(64.0, 4.0, 3.30),
+                pk(9316.0, -2.5, 1.54),
+                pk(92.0, -1.5, 2.55),
+                pk(1981.0, 1.0, 5.16),
+            ],
+        ),
+        headphone(
+            "hp-logitech-g-pro-x",
+            "Logitech",
+            "G Pro X",
+            "AutoEQ · Rtings HMS II.3",
+            -5.9,
+            vec![
+                ls(105.0, 1.3, 0.70),
+                pk(177.0, -5.1, 0.70),
+                pk(3727.0, 5.9, 2.52),
+                pk(40.0, 2.9, 1.19),
+                pk(381.0, 3.2, 1.10),
+                hs(10000.0, 4.2, 0.70),
+                pk(1060.0, 2.4, 3.35),
+                pk(1557.0, -2.1, 2.55),
+                pk(8739.0, -1.9, 2.81),
+                pk(5189.0, 1.9, 6.00),
+            ],
+        ),
+        headphone(
+            "hp-razer-blackshark-v2",
+            "Razer",
+            "BlackShark V2",
+            "AutoEQ · Rtings HMS II.3",
+            -5.9,
+            vec![
+                ls(105.0, 8.8, 0.70),
+                pk(1186.0, 3.5, 0.18),
+                pk(72.0, -5.1, 0.27),
+                pk(8531.0, -4.4, 1.38),
+                pk(2984.0, -5.8, 1.61),
+                hs(10000.0, -2.0, 0.70),
+                pk(4457.0, 2.8, 6.00),
+                pk(104.0, 0.7, 2.16),
+                pk(3714.0, -1.9, 6.00),
+                pk(62.0, -0.7, 2.34),
             ],
         ),
     ]
@@ -540,7 +895,7 @@ mod tests {
         let presets = builtin_presets();
         let ids: HashSet<_> = presets.iter().map(|p| &p.id).collect();
         assert_eq!(ids.len(), presets.len());
-        assert!(presets.len() >= 15);
+        assert!(presets.len() >= 30);
         for preset in &presets {
             assert!(preset.params.auto_eq.filters.len() <= 16);
             assert!(preset.params.eq_db.iter().all(|g| g.is_finite()));
@@ -549,8 +904,93 @@ mod tests {
 
     #[test]
     fn modes_exist() {
-        for id in ["music", "cinema", "gaming", "podcast", "vocal", "flat", "protection"] {
+        for id in [
+            "music",
+            "cinema",
+            "gaming",
+            "competitive",
+            "podcast",
+            "vocal",
+            "clarity",
+            "immersive",
+            "flat",
+            "bass",
+            "night",
+            "protection",
+        ] {
             assert!(find_builtin(id).is_some(), "{id}");
+        }
+    }
+
+    #[test]
+    fn headroom_estimate_tracks_the_eq_cascade() {
+        let mut params = ProcessingParams::default();
+        params.eq_db[5] = 6.0; // 1 kHz
+        let boost = max_static_boost_db(&params);
+        assert!((boost - 6.0).abs() < 0.2, "estimated {boost:.2} dB");
+
+        let mut bass = ProcessingParams::default();
+        bass.bass.enabled = true;
+        bass.bass.intensity = 0.4;
+        bass.bass.cutoff_hz = 70.0;
+        let boost = max_static_boost_db(&bass);
+        assert!((boost - 6.0).abs() < 0.3, "bass shelf {boost:.2} dB");
+    }
+
+    #[test]
+    fn content_modes_keep_their_boost_inside_the_allowance() {
+        for preset in builtin_presets()
+            .iter()
+            .filter(|preset| preset.category != PresetCategory::Headphone)
+        {
+            let residual = max_static_boost_db(&preset.params) + preset.params.preamp_db;
+            assert!(
+                residual <= PRESET_HEADROOM_ALLOWANCE_DB + 0.2,
+                "{} leaves {residual:+.1} dB of static boost",
+                preset.id
+            );
+            assert!(
+                preset.params.preamp_db >= -12.0,
+                "{} attenuates far beyond its static boost",
+                preset.id
+            );
+        }
+    }
+
+    #[test]
+    fn headphone_profiles_are_measured_corrections() {
+        let measured = [
+            "hp-jbl-quantum-100",
+            "hp-jbl-quantum-400",
+            "hp-jbl-quantum-800",
+            "hp-jbl-quantum-one",
+            "hp-jbl-tune770nc",
+            "hp-sony-wh1000xm4",
+            "hp-sony-wh1000xm5",
+            "hp-bose-qc45",
+            "hp-bose-qc-ultra",
+            "hp-sennheiser-hd600",
+            "hp-sennheiser-momentum4",
+            "hp-apple-airpods-max",
+            "hp-apple-airpods-pro2",
+            "hp-samsung-buds2-pro",
+            "hp-ath-m50x",
+            "hp-beyerdynamic-dt770",
+            "hp-hyperx-cloud-2",
+            "hp-steelseries-arctis-nova-pro",
+            "hp-logitech-g-pro-x",
+            "hp-razer-blackshark-v2",
+        ];
+        for id in measured {
+            let preset = find_builtin(id).unwrap_or_else(|| panic!("{id} is missing"));
+            assert_eq!(preset.category, PresetCategory::Headphone);
+            let auto_eq = &preset.params.auto_eq;
+            assert!(auto_eq.enabled, "{id}");
+            assert_eq!(auto_eq.filters.len(), 10, "{id}");
+            assert!((-24.0..=0.0).contains(&auto_eq.preamp_db), "{id}");
+            assert!(preset.params.eq_db.iter().all(|gain| *gain == 0.0), "{id}");
+            assert!(preset.brand.is_some() && preset.model.is_some(), "{id}");
+            assert!(preset.description.contains("AutoEQ"), "{id}");
         }
     }
 

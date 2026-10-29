@@ -50,7 +50,9 @@ pub fn model_path() -> PathBuf {
 }
 
 pub fn status() -> ModelStatus {
-    let bytes = fs::metadata(model_path()).map(|meta| meta.len()).unwrap_or(0);
+    let bytes = fs::metadata(model_path())
+        .map(|meta| meta.len())
+        .unwrap_or(0);
     ModelStatus {
         installed: bytes == MODEL_BYTES,
         bytes,
@@ -103,8 +105,8 @@ pub fn download_with(mut progress: impl FnMut(u64, u64)) -> Result<ModelStatus, 
 
     let total = response.content_length().unwrap_or(MODEL_BYTES);
     progress(0, total);
-    let mut file = File::create(&part)
-        .map_err(|err| format!("Não foi possível gravar o modelo: {err}"))?;
+    let mut file =
+        File::create(&part).map_err(|err| format!("Não foi possível gravar o modelo: {err}"))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 20];
     let mut received = 0u64;

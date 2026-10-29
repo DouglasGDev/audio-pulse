@@ -13,6 +13,8 @@ const CATEGORY_ICONS: Record<PresetCategory, IconName> = {
   gaming: "spatial",
   podcast: "headphone",
   vocal: "wave",
+  clarity: "sparkle",
+  immersive: "spatial",
   flat: "equalizer",
   bass: "speaker",
   night: "moon",
@@ -120,7 +122,7 @@ export function Presets() {
         </header>
         <div className="headphone-grid">
           {headphones.map((preset) => {
-            const active = view.activePresetId === preset.id;
+            const active = view.activeHeadphoneId === preset.id;
             return (
               <button
                 key={preset.id}

@@ -151,6 +151,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         ...view,
         params: update.params,
         activePresetId: update.activePresetId,
+        activeHeadphoneId: update.activeHeadphoneId,
       },
     });
   };

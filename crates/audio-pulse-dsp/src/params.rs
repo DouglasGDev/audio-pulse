@@ -114,6 +114,10 @@ pub struct CompressorParams {
     pub release_ms: f32,
     pub knee_db: f32,
     pub makeup_db: f32,
+    /// Leave deep bass out of the detector so kicks do not duck the mix. The
+    /// hearing-protection compressor turns this off to attenuate every
+    /// frequency by the same amount.
+    pub sidechain_hpf: bool,
 }
 
 impl Default for CompressorParams {
@@ -126,6 +130,7 @@ impl Default for CompressorParams {
             release_ms: 150.0,
             knee_db: 6.0,
             makeup_db: 0.0,
+            sidechain_hpf: true,
         }
     }
 }
@@ -195,6 +200,8 @@ impl LoudSoundReductionParams {
             release_ms: 200.0,
             knee_db: 8.0,
             makeup_db: 0.0,
+            // Safety processing must be spectrally flat.
+            sidechain_hpf: false,
         }
     }
 }
@@ -261,6 +268,9 @@ pub struct AutoEqParams {
     pub enabled: bool,
     pub preamp_db: f32,
     pub filters: Vec<AutoEqFilter>,
+    /// Profile or product name of an imported correction. Built-in measured
+    /// profiles leave it empty; it is display metadata, never audio.
+    pub name: Option<String>,
 }
 
 impl Default for AutoEqParams {
@@ -269,6 +279,7 @@ impl Default for AutoEqParams {
             enabled: true,
             preamp_db: 0.0,
             filters: Vec::new(),
+            name: None,
         }
     }
 }
@@ -397,6 +408,13 @@ impl ProcessingParams {
             filter.gain_db = clamp(filter.gain_db, -24.0, 24.0, 0.0);
             filter.q = clamp(filter.q, 0.1, 18.0, 1.0);
         }
+        self.auto_eq.name = self
+            .auto_eq
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(|name| name.chars().take(80).collect());
 
         self.ear_profile.preamp_db = clamp(self.ear_profile.preamp_db, -24.0, 12.0, 0.0);
         self.ear_profile.filters.truncate(MAX_AUTOEQ_FILTERS);
@@ -428,10 +446,15 @@ impl ProcessingParams {
             && self.auto_eq.filters.is_empty()
     }
 
-    /// Copies the sound-shaping fields from another parameter set while
-    /// preserving user-owned state: master volume, bypass and the ear profile.
-    /// Hearing protection is part of the preset, so applying one switches it on
-    /// or off.
+    /// Copies the content-shaping fields from a preset while preserving
+    /// user-owned state: master volume, bypass, the measured headphone
+    /// correction and the ear profile. Hearing protection is part of the
+    /// preset, so applying one switches it on or off.
+    ///
+    /// The headphone correction lives in `auto_eq` and belongs to the device
+    /// (imported AutoEQ/OPRA profile or a measured built-in), so a content
+    /// preset never overwrites it. Use `apply_headphone_correction_from` to
+    /// change it.
     pub fn apply_processing_from(&mut self, other: &Self) {
         self.preamp_db = other.preamp_db;
         self.eq_db = other.eq_db;
@@ -443,8 +466,13 @@ impl ProcessingParams {
         self.loud_sound_reduction = other.loud_sound_reduction.clone();
         self.spatial = other.spatial.clone();
         self.crossfeed = other.crossfeed.clone();
-        self.auto_eq = other.auto_eq.clone();
         self.adaptive_eq = other.adaptive_eq;
+    }
+
+    /// Replaces only the measured headphone correction, leaving the content
+    /// preset, the graphic EQ and the ear profile untouched.
+    pub fn apply_headphone_correction_from(&mut self, other: &Self) {
+        self.auto_eq = other.auto_eq.clone();
     }
 }
 
@@ -526,6 +554,46 @@ mod tests {
         current.apply_processing_from(&preset);
         assert_eq!(current.ear_profile, ear);
         assert!(current.bass.enabled);
+    }
+
+    #[test]
+    fn preset_apply_preserves_the_measured_headphone_correction() {
+        let correction = AutoEqParams {
+            enabled: true,
+            preamp_db: -6.2,
+            filters: vec![AutoEqFilter {
+                kind: FilterKind::Peaking,
+                freq: 105.0,
+                gain_db: 5.5,
+                q: 0.7,
+            }],
+            name: Some("Test profile".into()),
+        };
+        let mut current = ProcessingParams {
+            auto_eq: correction.clone(),
+            ..Default::default()
+        };
+        let preset = ProcessingParams {
+            eq_db: [3.0; EQ_BAND_COUNT],
+            ..Default::default()
+        };
+        current.apply_processing_from(&preset);
+        assert_eq!(current.auto_eq, correction);
+        assert_eq!(current.eq_db, preset.eq_db);
+
+        // A headphone profile changes only the correction.
+        let mut headphone = ProcessingParams::default();
+        headphone.auto_eq.preamp_db = -8.0;
+        headphone.auto_eq.filters = vec![AutoEqFilter {
+            kind: FilterKind::Highshelf,
+            freq: 9_000.0,
+            gain_db: -2.0,
+            q: 0.7,
+        }];
+        headphone.eq_db = [9.0; EQ_BAND_COUNT];
+        current.apply_headphone_correction_from(&headphone);
+        assert_eq!(current.auto_eq, headphone.auto_eq);
+        assert_eq!(current.eq_db, preset.eq_db);
     }
 
     #[test]

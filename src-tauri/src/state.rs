@@ -6,18 +6,17 @@ use crate::audio::devices;
 use crate::audio::engine::{EngineHandle, EngineStart, PreviewSource};
 use crate::audio::system_default::{self, Engaged};
 use crate::audio::system_volume;
-use crate::config::ConfigStore;
+use crate::config::{ConfigStore, PersistedConfig};
 use crate::models::{AppView, BatteryInfo, DeviceList, EngineInfo, Settings};
 use crate::tray;
-use parking_lot::{Mutex, RwLock};
-use audio_pulse_dsp::presets::{builtin_presets, find_builtin};
+use audio_pulse_dsp::presets::{builtin_presets, find_builtin, Preset};
 use audio_pulse_dsp::{EarProfileParams, PresetCategory, ProcessingParams, SpatialMode};
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const ROUTE_OUTPUT_WARNING: &str =
-    "Nenhum fone disponível: conecte um fone para a rota continuar.";
+const ROUTE_OUTPUT_WARNING: &str = "Nenhum fone disponível: conecte um fone para a rota continuar.";
 const ROUTE_INPUT_WARNING: &str =
     "Cabo virtual não encontrado: instale ou reative o cabo em Ajustes → Áudio.";
 const ROUTE_RECOVERY_INTERVAL: Duration = Duration::from_millis(1800);
@@ -93,6 +92,7 @@ impl AppState {
             settings: snapshot.settings,
             presets,
             active_preset_id: snapshot.active_preset_id,
+            active_headphone_id: snapshot.active_headphone_id,
             devices: self.devices.read().clone(),
             engine: self.engine.info(),
             battery: self.battery.read().clone(),
@@ -121,26 +121,26 @@ impl AppState {
         let params = params.sanitized();
         let previous_volume = self.store.snapshot().params.volume;
         let snapshot = self.store.snapshot();
-        let still_matches = match snapshot.active_preset_id.as_deref() {
-            Some(id) => {
-                let preset = find_builtin(id).or_else(|| {
-                    snapshot
-                        .custom_presets
-                        .iter()
-                        .find(|preset| preset.id == id)
-                        .cloned()
-                });
-                preset
-                    .map(|preset| same_shaping(&preset.params, &params))
-                    .unwrap_or(false)
-            }
+        let content_matches = match snapshot.active_preset_id.as_deref() {
+            Some(id) => lookup_preset(&snapshot, id)
+                .map(|preset| same_shaping(&preset.params, &params))
+                .unwrap_or(false),
+            None => true,
+        };
+        let headphone_matches = match snapshot.active_headphone_id.as_deref() {
+            Some(id) => lookup_preset(&snapshot, id)
+                .map(|preset| same_auto_eq(&preset.params.auto_eq, &params.auto_eq))
+                .unwrap_or(false),
             None => true,
         };
         self.store.mutate(|config| {
             config.params = params.clone();
-            if !still_matches {
+            if !content_matches {
                 log::debug!("active preset cleared after manual change");
                 config.active_preset_id = None;
+            }
+            if !headphone_matches {
+                config.active_headphone_id = None;
             }
         });
         if declick {
@@ -221,10 +221,7 @@ impl AppState {
         let now = Instant::now();
         let (enabled, retrying) = {
             let sync = self.volume_sync.lock();
-            (
-                sync.enabled,
-                sync.retry_at.is_some_and(|at| now >= at),
-            )
+            (sync.enabled, sync.retry_at.is_some_and(|at| now >= at))
         };
         if !enabled {
             if retrying {
@@ -415,21 +412,23 @@ impl AppState {
 
     pub fn apply_preset(&self, id: &str) -> Result<(), String> {
         let snapshot = self.store.snapshot();
-        let preset = find_builtin(id)
-            .or_else(|| {
-                snapshot
-                    .custom_presets
-                    .iter()
-                    .find(|preset| preset.id == id)
-                    .cloned()
-            })
-            .ok_or_else(|| format!("Preset não encontrado: {id}"))?;
+        let preset =
+            lookup_preset(&snapshot, id).ok_or_else(|| format!("Preset não encontrado: {id}"))?;
+        let headphone = preset.category == PresetCategory::Headphone;
         let mut params = snapshot.params.clone();
-        params.apply_processing_from(&preset.params);
+        if headphone {
+            params.apply_headphone_correction_from(&preset.params);
+        } else {
+            params.apply_processing_from(&preset.params);
+        }
         let params = params.sanitized();
         self.store.mutate(|config| {
             config.params = params.clone();
-            config.active_preset_id = Some(id.to_string());
+            if headphone {
+                config.active_headphone_id = Some(id.to_string());
+            } else {
+                config.active_preset_id = Some(id.to_string());
+            }
         });
         self.engine.set_params_declick(&params);
         Ok(())
@@ -447,8 +446,10 @@ impl AppState {
             .unwrap_or(0);
         let id = format!("custom-{stamp}");
         let mut params = snapshot.params.sanitized();
-        // The ear profile belongs to the user, not to the preset.
+        // The ear profile and the measured headphone correction belong to the
+        // user and the device, not to a content preset.
         params.ear_profile = EarProfileParams::default();
+        params.auto_eq = Default::default();
         let preset = audio_pulse_dsp::Preset {
             id: id.clone(),
             name: name.to_string(),
@@ -466,13 +467,15 @@ impl AppState {
         Ok(id)
     }
 
-    /// Returns the sound to the app's factory state: the default preset and no
-    /// ear profile. The master volume belongs to Windows and is left alone.
+    /// Returns the sound to the app's factory state: the default preset, no
+    /// measured headphone correction and no ear profile. The master volume
+    /// belongs to Windows and is left alone.
     pub fn restore_sound_defaults(&self) -> Result<ProcessingParams, String> {
         let (preset_id, params) = factory_sound_params(self.params().volume)?;
         self.store.mutate(|config| {
             config.params = params.clone();
             config.active_preset_id = Some(preset_id);
+            config.active_headphone_id = None;
         });
         self.engine.set_params_declick(&params);
         Ok(params)
@@ -506,11 +509,7 @@ impl AppState {
         });
     }
 
-    pub fn start_engine(
-        &self,
-        mode: &str,
-        wav_path: Option<String>,
-    ) -> Result<EngineInfo, String> {
+    pub fn start_engine(&self, mode: &str, wav_path: Option<String>) -> Result<EngineInfo, String> {
         let _op = self.route_op.lock();
         self.start_engine_inner(mode, wav_path)
     }
@@ -531,9 +530,11 @@ impl AppState {
                 "Selecione o fone como saída em Ajustes → Áudio para iniciar a rota.".to_string()
             })?;
             if devices::is_virtual_name(output) {
-                return Err("A saída do cabo virtual não pode ser o destino: selecione o \
+                return Err(
+                    "A saída do cabo virtual não pode ser o destino: selecione o \
                             fone em Ajustes → Áudio."
-                    .into());
+                        .into(),
+                );
             }
         } else {
             // Previews replace the route; give system audio back to the
@@ -548,9 +549,19 @@ impl AppState {
                 .clone()
                 .or_else(|| self.devices.read().default_output.clone());
             if let Some(key) = output_key {
-                if let Some(preset_id) = settings.device_profiles.get(&key) {
-                    if snapshot.active_preset_id.as_deref() != Some(preset_id.as_str()) {
-                        if let Err(err) = self.apply_preset(preset_id) {
+                if let Some(preset_id) = lookup_device_profile(&settings.device_profiles, &key) {
+                    let current = self.store.snapshot();
+                    let already_active = lookup_preset(&current, &preset_id)
+                        .map(|preset| {
+                            if preset.category == PresetCategory::Headphone {
+                                current.active_headphone_id.as_deref() == Some(preset_id.as_str())
+                            } else {
+                                current.active_preset_id.as_deref() == Some(preset_id.as_str())
+                            }
+                        })
+                        .unwrap_or(false);
+                    if !already_active {
+                        if let Err(err) = self.apply_preset(&preset_id) {
                             self.push_warning(err);
                         }
                     }
@@ -680,40 +691,61 @@ impl AppState {
     }
 
     /// A fresh install starts with a flat curve and no preset, which sounds
-    /// exactly like no processing at all.
+    /// exactly like no processing at all. This also migrates the single
+    /// `active_preset_id` slot used before content and headphone correction
+    /// became independent layers.
     pub fn ensure_default_preset(&self) {
         let snapshot = self.store.snapshot();
-        let active_matches = match snapshot.active_preset_id.as_deref() {
-            Some(id) => find_builtin(id)
-                .or_else(|| {
-                    snapshot
-                        .custom_presets
-                        .iter()
-                        .find(|preset| preset.id == id)
-                        .cloned()
-                })
+        if let Some(id) = snapshot.active_preset_id.clone() {
+            if let Some(preset) = lookup_preset(&snapshot, &id) {
+                if preset.category == PresetCategory::Headphone {
+                    let keep = same_auto_eq(&preset.params.auto_eq, &snapshot.params.auto_eq);
+                    self.store.mutate(|config| {
+                        config.active_headphone_id = keep.then_some(id);
+                        config.active_preset_id = None;
+                    });
+                }
+            }
+        }
+
+        let snapshot = self.store.snapshot();
+        let headphone_matches = match snapshot.active_headphone_id.as_deref() {
+            Some(id) => lookup_preset(&snapshot, id)
+                .map(|preset| same_auto_eq(&preset.params.auto_eq, &snapshot.params.auto_eq))
+                .unwrap_or(false),
+            None => true,
+        };
+        if !headphone_matches {
+            self.store
+                .mutate(|config| config.active_headphone_id = None);
+        }
+
+        let content_matches = match snapshot.active_preset_id.as_deref() {
+            Some(id) => lookup_preset(&snapshot, id)
                 .map(|preset| same_shaping(&preset.params, &snapshot.params))
                 .unwrap_or(false),
             None => false,
         };
-        if snapshot.active_preset_id.is_some() && !active_matches {
+        if snapshot.active_preset_id.is_some() && !content_matches {
             self.store.mutate(|config| config.active_preset_id = None);
         }
         let snapshot = self.store.snapshot();
         if snapshot.active_preset_id.is_some() {
             return;
         }
-        if snapshot.params.is_neutral() {
+        if content_is_neutral(&snapshot.params) {
             if let Err(err) = self.apply_preset("music") {
                 self.push_warning(err);
             }
             return;
         }
-        // A null id with a curve identical to a built-in preset means the id
-        // was lost (older config or an interrupted save); show the preset
-        // instead of an untitled custom curve.
+        // A null id with a curve identical to a built-in content preset means
+        // the id was lost (older config or an interrupted save); show the
+        // preset instead of an untitled custom curve. Headphone profiles are
+        // corrections, never content presets.
         let matched = builtin_presets()
             .into_iter()
+            .filter(|preset| preset.category != PresetCategory::Headphone)
             .find(|preset| same_shaping(&preset.params, &snapshot.params));
         if let Some(preset) = matched {
             self.store
@@ -893,7 +925,9 @@ impl AppState {
         match self.start_engine_inner("route", None) {
             Ok(_) => true,
             Err(err) => {
-                self.push_warning(format!("Não foi possível usar \"{name}\" como saída: {err}"));
+                self.push_warning(format!(
+                    "Não foi possível usar \"{name}\" como saída: {err}"
+                ));
                 false
             }
         }
@@ -1008,8 +1042,9 @@ pub fn emit_view(app: &AppHandle, state: &AppState) {
     state.sync_tray(app);
 }
 
-/// Factory sound: the Music preset, no bypass and no ear profile. Master
-/// volume is Windows-owned, so the caller passes the current value back in.
+/// Factory sound: the Music preset, no bypass, no measured headphone
+/// correction and no ear profile. Master volume is Windows-owned, so the
+/// caller passes the current value back in.
 fn factory_sound_params(volume: f32) -> Result<(String, ProcessingParams), String> {
     let preset = find_builtin("music").ok_or("Preset padrão não encontrado.")?;
     let mut params = ProcessingParams::default();
@@ -1017,11 +1052,13 @@ fn factory_sound_params(volume: f32) -> Result<(String, ProcessingParams), Strin
     params.volume = volume;
     params.bypass = false;
     params.ear_profile = EarProfileParams::default();
+    params.auto_eq = Default::default();
     Ok((preset.id.clone(), params.sanitized()))
 }
 
-/// Compares only the sound-shaping fields; master volume, bypass and the ear
-/// profile remain user-owned and never invalidate the selected preset.
+/// Compares only the fields a content preset owns. Master volume, bypass, the
+/// measured headphone correction and the ear profile stay user/device-owned
+/// and never invalidate the selected content preset.
 fn same_shaping(left: &ProcessingParams, right: &ProcessingParams) -> bool {
     let mut left = left.clone();
     let mut right = right.clone();
@@ -1031,7 +1068,79 @@ fn same_shaping(left: &ProcessingParams, right: &ProcessingParams) -> bool {
     right.bypass = false;
     left.ear_profile = EarProfileParams::default();
     right.ear_profile = EarProfileParams::default();
+    left.auto_eq = Default::default();
+    right.auto_eq = Default::default();
     left == right
+}
+
+/// Only the measured correction decides whether a headphone profile is still
+/// active; content stages and the ear profile never invalidate it.
+fn same_auto_eq(
+    left: &audio_pulse_dsp::AutoEqParams,
+    right: &audio_pulse_dsp::AutoEqParams,
+) -> bool {
+    left == right
+}
+
+fn content_is_neutral(params: &ProcessingParams) -> bool {
+    let mut shaping = params.clone();
+    shaping.auto_eq = Default::default();
+    shaping.ear_profile = EarProfileParams::default();
+    shaping.is_neutral()
+}
+
+fn lookup_preset(snapshot: &PersistedConfig, id: &str) -> Option<Preset> {
+    find_builtin(id).or_else(|| {
+        snapshot
+            .custom_presets
+            .iter()
+            .find(|preset| preset.id == id)
+            .cloned()
+    })
+}
+
+/// Endpoint names are user- and driver-authored. Normalize case and spacing
+/// before matching so a saved profile survives a name that Windows decorated
+/// with the jack, the driver or the connection order.
+fn normalize_device_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut pending_space = false;
+    for ch in name.to_lowercase().chars() {
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+        } else {
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Exact normalized match first, then the longest saved name that prefixes the
+/// current one (Windows usually appends to the base name).
+fn lookup_device_profile(
+    profiles: &std::collections::BTreeMap<String, String>,
+    device: &str,
+) -> Option<String> {
+    let key = normalize_device_name(device);
+    if let Some(preset) = profiles
+        .iter()
+        .find(|(name, _)| normalize_device_name(name) == key)
+        .map(|(_, preset)| preset.clone())
+    {
+        return Some(preset);
+    }
+    profiles
+        .iter()
+        .filter_map(|(name, preset)| {
+            let saved = normalize_device_name(name);
+            (!saved.is_empty() && key.starts_with(&saved)).then_some((saved.len(), preset))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, preset)| preset.clone())
 }
 
 /// The physical output the route should feed: the saved choice while it
@@ -1195,7 +1304,11 @@ mod tests {
 
     #[test]
     fn route_output_disappears_without_a_physical_device() {
-        let list = device_list(vec![device("CABLE Input", true, true)], vec![], Some("CABLE Input"));
+        let list = device_list(
+            vec![device("CABLE Input", true, true)],
+            vec![],
+            Some("CABLE Input"),
+        );
         assert_eq!(pick_route_output(&list, Some("Headset")), None);
     }
 
@@ -1241,7 +1354,10 @@ mod tests {
         let music = find_builtin("music").unwrap().params;
         let (preset_id, params) = factory_sound_params(0.115).unwrap();
         assert_eq!(preset_id, "music");
-        assert!((params.volume - 0.115).abs() < 1e-6, "volume is Windows-owned");
+        assert!(
+            (params.volume - 0.115).abs() < 1e-6,
+            "volume is Windows-owned"
+        );
         assert!(!params.bypass);
         assert!(!params.ear_profile.enabled);
         assert!(params.ear_profile.filters.is_empty());
@@ -1266,6 +1382,65 @@ mod tests {
         assert!(
             same_shaping(&preset, &current),
             "the ear profile is independent from the selected preset"
+        );
+    }
+
+    #[test]
+    fn headphone_correction_never_breaks_content_preset_matching() {
+        let content = find_builtin("cinema").unwrap().params;
+        let mut current = ProcessingParams::default();
+        current.apply_processing_from(&content);
+        let headphone = find_builtin("hp-sony-wh1000xm4").unwrap().params;
+        current.apply_headphone_correction_from(&headphone);
+        assert!(
+            same_shaping(&content, &current),
+            "a device correction must not unselect the content preset"
+        );
+        assert!(same_auto_eq(&headphone.auto_eq, &current.auto_eq));
+
+        current.auto_eq.filters[0].gain_db += 0.5;
+        assert!(!same_auto_eq(&headphone.auto_eq, &current.auto_eq));
+        assert!(same_shaping(&content, &current));
+    }
+
+    #[test]
+    fn factory_sound_clears_the_measured_correction() {
+        let headphone = find_builtin("hp-sony-wh1000xm4").unwrap().params;
+        let mut stored = ProcessingParams::default();
+        stored.apply_headphone_correction_from(&headphone);
+        stored.ear_profile.enabled = true;
+        let (_, params) = factory_sound_params(0.4).unwrap();
+        assert!(params.auto_eq.filters.is_empty());
+        assert!(!params.auto_eq.enabled || params.auto_eq.filters.is_empty());
+        assert!(!params.ear_profile.enabled);
+    }
+
+    #[test]
+    fn device_profiles_survive_windows_name_decoration() {
+        let mut profiles = std::collections::BTreeMap::new();
+        profiles.insert("Headphones".to_string(), "music".to_string());
+        profiles.insert(
+            "Headset Earphone (HyperX Cloud II)".to_string(),
+            "hp-hyperx-cloud-2".to_string(),
+        );
+
+        assert_eq!(
+            lookup_device_profile(&profiles, "HEADPHONES").as_deref(),
+            Some("music")
+        );
+        assert_eq!(
+            lookup_device_profile(&profiles, "Headphones  (Realtek(R) Audio)").as_deref(),
+            Some("music"),
+            "case and spacing changes must keep the mapping"
+        );
+        assert_eq!(
+            lookup_device_profile(&profiles, "Headset Earphone (HyperX Cloud II)").as_deref(),
+            Some("hp-hyperx-cloud-2")
+        );
+        assert_eq!(
+            lookup_device_profile(&profiles, "Speakers (Realtek(R) Audio)"),
+            None,
+            "a different device must never borrow the profile"
         );
     }
 }

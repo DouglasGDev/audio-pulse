@@ -12,12 +12,9 @@ use windows_sys::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
-const IID_IMM_DEVICE_ENUMERATOR: GUID =
-    GUID::from_u128(0xa95664d2_9614_4f35_a746_de8db63617e6);
-const IID_IAUDIO_ENDPOINT_VOLUME: GUID =
-    GUID::from_u128(0x5cdf2c82_841e_4546_9722_0cf74078229a);
-const CLSID_POLICY_CONFIG_CLIENT: GUID =
-    GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+const IID_IMM_DEVICE_ENUMERATOR: GUID = GUID::from_u128(0xa95664d2_9614_4f35_a746_de8db63617e6);
+const IID_IAUDIO_ENDPOINT_VOLUME: GUID = GUID::from_u128(0x5cdf2c82_841e_4546_9722_0cf74078229a);
+const CLSID_POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
 const IID_IPOLICY_CONFIG: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
 
 const E_RENDER: i32 = 0;
@@ -140,8 +137,9 @@ impl Session {
     pub fn default_state(&self) -> Result<DefaultState, String> {
         unsafe {
             let device = default_device(self.enumerator.0)?;
-            let endpoint = endpoint_info(device.0)
-                .ok_or_else(|| "Não foi possível identificar a saída de áudio padrão.".to_string())?;
+            let endpoint = endpoint_info(device.0).ok_or_else(|| {
+                "Não foi possível identificar a saída de áudio padrão.".to_string()
+            })?;
             let volume = volume_state(device.0).unwrap_or(VolumeState {
                 scalar: 1.0,
                 muted: false,
@@ -376,12 +374,8 @@ unsafe fn container_id(device: *mut c_void) -> Option<GUID> {
 }
 
 unsafe fn default_device(enumerator: *mut c_void) -> Result<ComPtr, String> {
-    let get_default: unsafe extern "system" fn(
-        *mut c_void,
-        i32,
-        i32,
-        *mut *mut c_void,
-    ) -> HRESULT = transmute_slot(enumerator, 4);
+    let get_default: unsafe extern "system" fn(*mut c_void, i32, i32, *mut *mut c_void) -> HRESULT =
+        transmute_slot(enumerator, 4);
     let mut device: *mut c_void = ptr::null_mut();
     check(
         get_default(enumerator, E_RENDER, E_CONSOLE, &mut device),
@@ -405,12 +399,7 @@ unsafe fn find_device_by_name(
     ) -> HRESULT = transmute_slot(enumerator, 3);
     let mut collection: *mut c_void = ptr::null_mut();
     check(
-        enum_endpoints(
-            enumerator,
-            E_RENDER,
-            DEVICE_STATE_ACTIVE,
-            &mut collection,
-        ),
+        enum_endpoints(enumerator, E_RENDER, DEVICE_STATE_ACTIVE, &mut collection),
         "Falha ao listar as saídas de áudio",
     )?;
     if collection.is_null() {
@@ -517,11 +506,8 @@ unsafe fn apply_volume(
     let volume = activate_volume(device)?;
     let context = GUID::from_u128(0);
     if let Some(scalar) = scalar {
-        let set_scalar: unsafe extern "system" fn(
-            *mut c_void,
-            f32,
-            *const GUID,
-        ) -> HRESULT = transmute_slot(volume.0, 7);
+        let set_scalar: unsafe extern "system" fn(*mut c_void, f32, *const GUID) -> HRESULT =
+            transmute_slot(volume.0, 7);
         check(
             set_scalar(volume.0, scalar.clamp(0.0, 1.0), &context),
             "Falha ao ajustar o volume da saída de áudio",

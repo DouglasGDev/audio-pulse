@@ -30,6 +30,8 @@ export interface CompressorParams {
   releaseMs: number;
   kneeDb: number;
   makeupDb: number;
+  /** Leave deep bass out of the detector; off for hearing protection. */
+  sidechainHpf: boolean;
 }
 
 export interface LimiterParams {
@@ -64,6 +66,8 @@ export interface AutoEqParams {
   enabled: boolean;
   preampDb: number;
   filters: AutoEqFilter[];
+  /** Imported profile/product name; null for built-in corrections. */
+  name: string | null;
 }
 
 export interface AdaptiveEqParams {
@@ -98,6 +102,7 @@ export interface ProcessingParams {
 export interface ParamsUpdate {
   params: ProcessingParams;
   activePresetId: string | null;
+  activeHeadphoneId: string | null;
 }
 
 export type PresetCategory =
@@ -106,6 +111,8 @@ export type PresetCategory =
   | "gaming"
   | "podcast"
   | "vocal"
+  | "clarity"
+  | "immersive"
   | "flat"
   | "bass"
   | "night"
@@ -176,6 +183,7 @@ export interface AppView {
   settings: Settings;
   presets: Preset[];
   activePresetId: string | null;
+  activeHeadphoneId: string | null;
   devices: DeviceList;
   engine: EngineInfo;
   battery: BatteryInfo | null;

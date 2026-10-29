@@ -23,9 +23,7 @@ pub fn register(app: &AppHandle, settings: &Settings) -> Vec<String> {
                     ));
                 }
             }
-            Err(err) => warnings.push(format!(
-                "Atalho inválido “{accelerator}” ({action}): {err}"
-            )),
+            Err(err) => warnings.push(format!("Atalho inválido “{accelerator}” ({action}): {err}")),
         }
     }
     warnings

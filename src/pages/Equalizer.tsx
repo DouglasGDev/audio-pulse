@@ -112,6 +112,7 @@ export function Equalizer() {
                       draft.autoEq.filters = [];
                       draft.autoEq.preampDb = 0;
                       draft.autoEq.enabled = false;
+                      draft.autoEq.name = null;
                     })
                   }
                   disabled={autoEq.filters.length === 0}
@@ -127,7 +128,13 @@ export function Equalizer() {
                 checked={autoEq.enabled}
                 onChange={(checked) => patchParams((draft) => (draft.autoEq.enabled = checked))}
                 label={t("eq.autoEq")}
-                description={`${t("eq.filters", { count: autoEq.filters.length })} · ${formatDb(autoEq.preampDb)}`}
+                description={`${[
+                  autoEq.name,
+                  t("eq.filters", { count: autoEq.filters.length }),
+                  formatDb(autoEq.preampDb),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}`}
               />
               {autoEq.filters.length > 0 && (
                 <ul className="filter-list">

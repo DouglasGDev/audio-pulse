@@ -21,5 +21,18 @@ later. It builds on the components below.
 | [VB-CABLE Virtual Audio Cable](https://vb-audio.com/Cable/) | Donationware (VB-Audio) | Windows installer fetched from the official vendor URL and run only after the user asks; not bundled. |
 | [BlackHole 2ch](https://existential.audio/blackhole/) | GPL-3.0 | macOS installer fetched from the official vendor URL and checksum-verified; not bundled. |
 
+## Reference data and profile formats
+
+| Source | License | Notes |
+| --- | --- | --- |
+| [AutoEQ](https://github.com/jaakkopasanen/AutoEq) | MIT | Parametric filter model, TXT/JSON profile formats and the conversion method used for the built-in measured corrections. |
+| [OPRA](https://github.com/opra-project/OPRA) | Publicly documented dataset | The importer accepts OPRA parametric profiles; no OPRA database is bundled. |
+| [Rtings](https://www.rtings.com/headphones) | Measurement data, attributed | Headphone measurements (HMS II.3 and B&K 5128 fixtures) used as the target of some built-in corrections. No Rtings pages or raw data are redistributed. |
+| [oratory1990](https://www.reddit.com/r/oratory1990/wiki/index) | Measurement data, attributed | Headphone measurements used as the target of some built-in corrections. No raw data is redistributed. |
+
+The built-in corrections are parametric filters derived from those public
+measurements, not measurements of the user's own unit. Audio Pulse is not
+affiliated with AutoEQ, OPRA, Rtings or oratory1990.
+
 Audio Pulse is not affiliated with Microsoft, Hugging Face, VB-Audio or the
 Depth Anything authors. All trademarks belong to their respective owners.

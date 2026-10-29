@@ -17,13 +17,13 @@ Construído com **Tauri 2 + Rust + React**. O áudio é processado inteiramente 
 - **Perfil por foto da orelha (estimativa local)**: um modelo de profundidade roda no dispositivo, estima a geometria da concha e do hélice e gera três filtros de 2–8 kHz em um estágio próprio, somado ao preset e ao AutoEQ. A foto nunca sai do computador.
 - **Tone controls**: médios (peaking em 1,5 kHz) e agudos (high shelf em 6 kHz).
 - **Bass Boost / subwoofer virtual** com intensidade, frequência de corte e síntese de harmônicos.
-- **Compressor** e **limiter com look-ahead** de 5 ms para evitar distorção e clipping.
+- **Compressor** de programa com detector RMS e sidechain com corte em 70 Hz, e **limiter true-peak** com look-ahead de 5 ms e estimativa inter-amostra em 4×.
 - **Compensação de loudness ISO 226** dependente do volume.
 - **Redução de sons altos**: compressor lento e estéreo aplicado depois do volume master, com intensidade ajustável e atuação em tempo real. Faz parte do preset **Proteção** e funciona com qualquer fone, sem depender de recurso do fabricante.
 - **Áudio espacial**: modos Binaural, **HRTF dinâmico** (ITD/ILD acompanham a imagem estéreo) e Surround 7.1 virtual, com largura do palco e ambiência.
 - **Equalização adaptativa**: análise de cinco bandas de oitava a cada 20 ms, com correções de até ±3 dB e proteção preditiva de pico.
 - **Crossfeed** para fones abertos ou fechados, com atraso ajustável.
-- **Presets**: 9 modos de uso + 12 perfis de fones, criação/exclusão/exportação/importação, AutoEQ.
+- **Presets**: 12 modos de uso + 20 perfis de fone medidos, criação/exclusão/exportação/importação e importação AutoEQ/OPRA em TXT ou JSON.
 - **Perfis por dispositivo**: aplica um preset automaticamente ao iniciar com uma saída específica.
 - **Medidores reais**: espectro de 56 bandas, níveis L/R, redução de ganho, correção do EQ adaptativo em 5 bandas, CPU, latência e falhas (xruns).
 - **Bypass instantâneo**, volume master, atalhos globais, bandeja do sistema e inicialização automática.
@@ -91,6 +91,8 @@ O **bypass** retorna a amostra original antes de qualquer estágio (passthrough 
 
 Alterações **discretas** (aplicar preset, ligar/desligar bypass, trocar o modo espacial) trocam o bloco inteiro de coeficientes de uma vez. Para isso não estalar, o processador desce a saída em 2 ms, aplica os novos parâmetros em silêncio e sobe em 30 ms. Sliders e volume são contínuos e passam direto, sem fade.
 
+Os presets de modo calculam o maior ganho estático da cascata — EQ gráfico, tone e low shelf do Bass Boost — em uma grade logarítmica a 48 kHz e embutem o excedente no preamp, mantendo 3 dB de folga. Isso evita que a curva deixe o limiter comprimindo o som o tempo todo. Perfis de fone e curvas importadas usam o preamp declarado no arquivo ou um valor estimado a partir da resposta combinada.
+
 ---
 
 ## Estrutura do projeto
@@ -104,12 +106,12 @@ audio-pulse/
 │       ├── bass.rs              # low shelf + síntese de harmônicos
 │       ├── spatial.rs           # 8 canais virtuais, ITD, sombra, reverb
 │       ├── crossfeed.rs         # mistura interaural com atraso
-│       ├── adaptive_eq.rs       # FFT de 20 ms, 5 bandas, headroom preditivo
-│       ├── dynamics.rs          # compressor e limiter look-ahead
+│       ├── adaptive_eq.rs       # FFT estéreo de 20 ms, 5 bandas, headroom preditivo
+│       ├── dynamics.rs          # compressor RMS com sidechain e limiter true-peak
 │       ├── loudness.rs          # curvas ISO 226:2003
 │       ├── chain.rs             # cadeia completa + análise
 │       ├── spectrum.rs          # 56 bandas, RMS e picos
-│       ├── autoeq.rs            # parser ParametricEQ.txt
+│       ├── autoeq.rs            # parser AutoEQ/OPRA (ParametricEQ.txt e JSON)
 │       ├── presets.rs           # presets embutidos
 │       ├── params.rs            # parâmetros serializáveis e sanitização
 │       └── lib.rs
@@ -210,7 +212,9 @@ Sem o runtime Tauri, a UI usa um **backend simulado**: navegação, presets, tem
 ### Testes
 
 ```bash
-cargo test --workspace     # DSP, parser AutoEQ, limites, resampler, sanitização
+cargo test --workspace     # DSP, parsers AutoEQ/OPRA, limites, resampler, sanitização
+cargo test -p audio-pulse-dsp --test baseline -- --nocapture
+                           # latência, teto de pico, planicidade, graves e headroom
 npm run build              # tsc + build de produção do frontend
 ```
 
@@ -279,7 +283,7 @@ Na tela **Painel**, os botões **Ruído rosa**, **Varredura** e **Arquivo WAV** 
    - **Espacial** — desligado, binaural, HRTF dinâmico ou surround 7.1; largura e ambiência.
    - **Dinâmica** — compressor e limiter, com curvas e redução de ganho em tempo real.
    - **Audição** — redução de sons altos, atuação do estágio, nível de saída e atalho para o preset Proteção.
-   - **Presets** — presets de modo, perfis de fone, presets personalizados e importação AutoEQ.
+   - **Presets** — presets de modo, perfis de fone, presets personalizados e importação AutoEQ/OPRA.
    - **Orelha** — foto local, enquadramento, análise de profundidade, curva estimada de 2–8 kHz e aplicação/remoção do perfil de orelha.
    - **Ajustes** — tema, idioma, buffer, dispositivos, perfis por dispositivo, atalhos e inicialização.
 4. **Bypass** na barra superior (ou atalho) compara instantaneamente com o som original.
@@ -287,14 +291,16 @@ Na tela **Painel**, os botões **Ruído rosa**, **Varredura** e **Arquivo WAV** 
 
 ### Presets e perfis
 
-- **9 modos embutidos**: Música, Cinema, Jogos, Podcast, Vocal, Flat, Bass, Noturno e Proteção.
-- **12 perfis de fone**: Sony WH-1000XM4/XM5, Bose QC45/QC Ultra, Sennheiser HD 600/Momentum 4, Apple AirPods Max/Pro 2ª ger., JBL Tune 770NC, Samsung Galaxy Buds2 Pro, Audio-Technica ATH-M50x e Beyerdynamic DT 770 Pro.
+- **12 modos embutidos**: Música, Cinema, Jogos, Competitivo, Podcast, Vocal, Clareza, Imersivo, Flat, Bass, Noturno e Proteção.
+- **20 perfis de fone medidos**: JBL Quantum 100/400/800/ONE e Tune 770NC; Sony WH-1000XM4/XM5; Bose QuietComfort 45 e QuietComfort Ultra; Sennheiser HD 600 e Momentum 4 Wireless; Apple AirPods Max e AirPods Pro 2; Samsung Galaxy Buds2 Pro; Audio-Technica ATH-M50x; Beyerdynamic DT 770 Pro; HyperX Cloud II; SteelSeries Arctis Nova Pro; Logitech G Pro X; Razer BlackShark V2.
 
-> Os perfis embutidos são **curvas de referência Audio Pulse**, não medições de laboratório. Para correção específica do seu exemplar, importe um perfil AutoEQ medido.
+> Os perfis embutidos são **correções derivadas de medições públicas** (Rtings HMS II.3, Rtings B&K 5128 e oratory1990, convertidas para o modelo paramétrico do AutoEQ). Não são medições da sua unidade: vedação, almofadas, variação de lote e encaixe mudam o resultado. Para o seu exemplar, importe um perfil AutoEQ ou OPRA.
 
-### AutoEQ
+### AutoEQ e OPRA
 
-Importe um arquivo `ParametricEQ.txt` do projeto AutoEQ:
+A importação aceita quatro formas, detectadas pelo conteúdo e não pela extensão:
+
+- `ParametricEQ.txt` do projeto AutoEQ:
 
 ```text
 # AutoEQ profile
@@ -304,7 +310,30 @@ Filter 2: ON LS Fc 80 Hz Gain -2.0 dB Q 0.70
 Filter 3: OFF PK Fc 2000 Hz Gain -4.0 dB Q 1.20
 ```
 
-O parser aceita `PK`, `LS`/`LSC` e `HS`/`HSC`, ignora filtros `OFF` e comentários, aplica o preamp e limita a 16 filtros. **GraphicEQ e convolução FIR não são suportados.** A importação liga o AutoEQ e desmarca o preset ativo, pois a correção passa a definir o som.
+- `ParametricEQ.json` gerado pelo pacote AutoEQ (sem preamp; ele é estimado):
+
+```json
+{"fs": 48000, "filters": [
+  {"type": "PEAKING", "fc": 105, "q": 0.7, "gain": 5.5},
+  {"type": "LOW_SHELF", "fc": 80, "q": 0.7, "gain": -2.0}
+]}
+```
+
+- Um perfil JSON do OPRA, ou uma linha inteira do `database_v1.jsonl`:
+
+```json
+{"type": "parametric_eq", "product_id": "sennheiser_hd650", "parameters": {
+  "gain_db": -4.5,
+  "bands": [
+    {"type": "peak_dip", "frequency": 105, "q": 0.7, "gain_db": 5.5},
+    {"type": "low_shelf", "frequency": 80, "q": 0.7, "gain_db": -2.0}
+  ]
+}}
+```
+
+O parser aceita peaking e shelves em todas as grafias dos dois projetos (`PK`/`PEAKING`/`peak_dip`, `LS`/`LOW_SHELF`/`low_shelf`, `HS`/`HIGH_SHELF`/`high_shelf`), ignora filtros `OFF`, tipos não suportados (passa-banda, notch, all-pass) e comentários, e limita a 16 filtros — no OPRA as bandas já vêm ordenadas por prioridade. O preamp vem do arquivo quando existe; quando não existe, é estimado somando o ganho de cada filtro numa grade logarítmica e usando o maior valor combinado, para nenhum reforço empurrar o limiter o tempo todo. O nome do produto/perfil aparece na descrição do AutoEQ no equalizador.
+
+A importação liga o AutoEQ e **preserva o preset de conteúdo**: apenas a correção de fone muda, e o perfil de fone selecionado é desmarcado porque a curva importada passa a ser a correção ativa. **GraphicEQ e convolução FIR não são suportados.**
 
 ### Perfil por foto da orelha (estimativa)
 
@@ -364,9 +393,19 @@ O grave percebido é construído em duas camadas:
 1. **Reforço físico** — um low shelf de até **+15 dB × intensidade** na frequência de corte (30–250 Hz, Q 0,707). Isso reforça o fundamental que o fone consegue reproduzir.
 2. **Síntese de harmônicos** — o sinal grave é extraído por um low-pass de 4ª ordem em ~1,6× o corte e saturado com `tanh` com ganho de entrada `1,5 + 5 × intensidade`, normalizado para não alterar o volume. A componente original é subtraída, sobrando apenas os harmônicos; um high-pass em ~1,35× o corte remove o fundamental remanescente, um DC blocker limpa o offset e um low-pass em 220 Hz suaviza o timbre. A mistura final é `0,9 × harmônicos × intensidade`.
 
+A camada de harmônicos vem do mono (`0,5 × (L+R)`) e o mesmo sinal entra nos dois canais: graves não são localizáveis, e um harmônico independente por canal criaria um fundo estéreo instável. O low-pass de extração são dois biquads (Q 0,54 e 1,31) com corte limitado a 45–380 Hz; o high-pass de limpeza fica em 60–360 Hz.
+
 O objetivo é o **fenômeno do fundamental ausente**: fones pequenos não reproduzem 40–80 Hz com energia, mas reproduzem bem 100–240 Hz. O cérebro infere o fundamental a partir dos harmônicos gerados, percebendo mais grave com menos excursão do driver e menos distorção mecânica do que um boost puro.
 
 Harmônicos, corte e intensidade são independentes; com harmônicos em 0% resta apenas o shelf.
+
+## Como funciona a dinâmica
+
+O compressor musical usa detector de **potência RMS**, não de pico: um kick isolado não derruba o mix inteiro. O detector é estéreo-ligado e o sidechain passa por um high-pass de 70 Hz, então o grave profundo quase não chega ao detector; o limiter continua cuidando dos picos. Ataque, liberação, joelho e proporção vêm dos parâmetros da página **Dinâmica**. A redução de sons altos usa o mesmo compressor com o filtro do sidechain desligado, porque a proteção precisa atenuar todas as frequências por igual.
+
+O limiter trabalha com **look-ahead de 5 ms** (240 amostras a 48 kHz) e o detector combina o pico de amostra com uma estimativa inter-amostra: Lagrange de 8 pontos em três fases internas, ou seja, 4× de sobreamostragem. Em fs/4 — o caso em que as amostras ficam a 0,707 do pico da onda — o estimador lê 0,978 do pico real; um interpolador cúbico leria 0,884 e deixaria passar cerca de 1 dB acima do teto. A detecção atrasa 4 amostras, bem dentro das 240 do look-ahead. No harness, a onda reconstruída fica no máximo 0,23 dB acima do teto.
+
+Reajustar um filtro copia apenas os coeficientes e preserva a memória (`z1`/`z2`), então mover o HRTF, trocar a curva de um preset ou reajustar o EQ adaptativo não estala. Nada aloca no caminho de áudio.
 
 ## Como funciona a redução de sons altos
 
@@ -375,6 +414,7 @@ A proteção auditiva é um compressor de programa lento, estéreo e feed-forwar
 - **Limiar** = `−10 − 14 × intensidade` dBFS (−24 dBFS na intensidade máxima).
 - **Proporção** = `1,5 + 2,5 × intensidade` (4:1 no máximo).
 - **Ataque de 5 ms, liberação de 200 ms, joelho de 8 dB e sem ganho de compensação** — o estágio só reduz, nunca levanta o sinal.
+- **Detector RMS full-band**: o filtro de 70 Hz do compressor musical fica desligado, então a redução é a mesma em todas as frequências.
 - **Estéreo ligado**: os dois canais recebem a mesma redução, então a imagem não se desloca.
 
 A resposta é **espectralmente plana**: o mesmo compressor atua em todo o espectro, sem alterar o equilíbrio tonal. Medido no crate de DSP: um tom de 200 Hz em amplitude 0,5 sofre mais de 8 dB de redução; um tom de 1 kHz em amplitude 0,002 (≈ −54 dBFS) passa com desvio menor que 0,5 dB; 200 Hz e 4 kHz recebem a mesma redução dentro de 1 dB.
@@ -395,7 +435,8 @@ O modo **Surround** faz upmix de estéreo para 8 canais virtuais — L, R, C, LF
 - **Sombra contralateral**: low-pass dependente do ângulo, com corte `750 + 8500·cos(θ)` Hz, além de atenuação de até ~12 dB na orelha oposta.
 - **Notch de orelha**: peaking em 7,3 kHz (frontal) ou 5,4 kHz (traseiro), simulando a filtragem da pinna.
 - **Laterais e traseiras**: taps de delay de 9/12 ms (sides) e 19/23 ms (rears), com inversão de polaridade para decorrelação.
-- **Ambiência**: reverb Schroeder estéreo (4 combs + 2 allpasses por orelha, pre-delay de 8 ms) alimentado pelo sinal ambiente; a intensidade escala com o controle **Ambiente**. O parâmetro **Amplitude** multiplica o azimute dos alto-falantes (0–1,5). Um trim final de −1,7 dB (surround) evita clipping.
+- **Reflexões iniciais**: seis taps fracionários (7,1/11,3/19,1 ms à esquerda; 8,9/13,7/23,3 ms à direita, com damping em 6,5 kHz) preenchem o intervalo antes do tail Schroeder, que só começa por volta de 38 ms. Sem eles, o reverb soa separado em vez de ser a sala ao redor.
+- **Ambiência**: reverb Schroeder estéreo (4 combs + 2 allpasses por orelha, pre-delay de 8 ms) alimentado pelo sinal ambiente; a intensidade escala com o controle **Ambiente**. O parâmetro **Amplitude** multiplica o azimute dos alto-falantes (0–1,5). Um trim final de −1,7 dB (surround), −0,9 dB (HRTF) ou −0,5 dB (binaural) evita clipping.
 
 O modo **HRTF dinâmico** usa o mesmo modelo de cabeça, mas em vez de posições fixas acompanha a imagem estéreo continuamente. Um seguidor de envelopes separa mid e side (ataque de 12 ms, liberação de 120 ms) e mede o quanto o mix está aberto:
 
@@ -415,11 +456,11 @@ O modo **Binaural** não faz upmix: renderiza L/R com pequeno âncora central, p
 
 Nenhum dos modos usa uma HRTF medida: o modelo é físico e genérico, então funciona em qualquer fone sem medições individuais.
 
-O modo **Crossfeed** é separado do espacial: mistura uma cópia do canal oposto com low-pass em 700 Hz e atraso de 0,05–1 ms (cerca de −5 dB no máximo), reduzindo a separação extrema típica de fones e aproximando a imagem de caixas.
+O modo **Crossfeed** é separado do espacial: mistura uma cópia do canal oposto com low-pass em 700 Hz e atraso de 0,05–1 ms, reduzindo a separação extrema típica de fones e aproximando a imagem de caixas. O bleed entra com `0,55 × quantidade` (−5,2 dB no máximo) e um low shelf em 700 Hz compensa o nível do grave mono, para o grave centralizado não subir junto com o estreitamento.
 
 ## Como funciona a Equalização Adaptativa
 
-A cada **20 ms** o estágio tira uma FFT de 2048 amostras com janela de Hann e soma a energia de cinco bandas de oitava centradas em **80 Hz, 300 Hz, 1 kHz, 3,5 kHz e 11 kHz**. Somar os bins — em vez de ler a magnitude de um único bin — integra a energia da oitava, então material musical, que cai cerca de 3 dB por oitava, lê aproximadamente plano nesses cinco pontos.
+A cada **20 ms** o estágio tira uma FFT de 2048 amostras com janela de Hann **para cada canal** e soma a energia de cinco bandas de oitava centradas em **80 Hz, 300 Hz, 1 kHz, 3,5 kHz e 11 kHz**. Somar os bins — em vez de ler a magnitude de um único bin — integra a energia da oitava, então material musical, que cai cerca de 3 dB por oitava, lê aproximadamente plano nesses cinco pontos. Como a potência dos dois canais é somada, conteúdo fora de fase continua sendo medido; a soma em mono o cancelaria.
 
 O alvo não é plano: usa uma inclinação suave de **+2 dB nos graves a −2 dB nos agudos** (`[+2, +1, 0, −1, −2] dB`) relativa à **mediana das bandas ativas**. Isso reflete a distribuição natural de música e cinema; um alvo plano deixaria quase todo material com brilho excessivo. Ancorar na mediana garante que as correções apenas redistribuem energia entre bandas — o estágio nunca muda o nível global.
 
@@ -464,7 +505,7 @@ O que não existe aqui: detecção dos marcos hélice/anti-hélice/lóbulo como 
 ## Latência, buffer e CPU
 
 - O buffer é configurável de **10 a 200 ms** (padrão 25 ms) e é convertido em frames na taxa do dispositivo.
-- A latência exibida é uma **estimativa**: rota = `3 × buffer + 5 ms` (captura + fila + saída + look-ahead); prévia = `buffer + 5 ms`. Drivers, o cabo virtual e o Bluetooth adicionam latência que o app não mede.
+- A latência exibida é uma **estimativa**: o stream contribui com `3 × buffer` na rota (captura + fila + saída) e `1 × buffer` na prévia; o DSP reporta a própria latência a cada bloco — 240 amostras (5 ms) do look-ahead a 48 kHz, e zero em bypass. Drivers, o cabo virtual e o Bluetooth adicionam latência que o app não mede.
 - A captura e a saída podem ter taxas diferentes; a conversão é linear com correção de drift de ±0,15% baseada no preenchimento do ring buffer. O ring mantém **duas rodadas de buffer** de folga: uma cobre o intervalo normal entre callbacks e a outra absorve um callback atrasado. Acima de quatro rodadas, as amostras mais antigas são descartadas de volta ao nível de folga e o evento conta um **xrun**.
 - A CPU mostrada é a carga do DSP dividida pela duração do bloco processado, suavizada — não é o uso total do processo.
 - **HRTF dinâmico e EQ adaptativo não adicionam latência**: a análise (retune a cada 2 ms / FFT de 20 ms) roda em paralelo; o áudio segue por biquads no caminho direto.
@@ -500,10 +541,10 @@ Enquanto a rota está ativa, o endpoint anterior fica registrado em `route-defau
 - **HRTF genérica.** O modo HRTF dinâmico adapta os ângulos ao conteúdo, mas o modelo esférico não usa medições individuais; a externalização varia entre pessoas e fones.
 - **EQ adaptativo não é correção de sala nem de fone.** Ele equilibra o material em cinco bandas de oitava; não mede a resposta do fone e não substitui AutoEQ. Não há aprendizado de máquina: o controlador é preditivo e determinístico.
 - **ISO 226 aproximada.** A compensação usa o volume master como proxy do nível de escuta, sem calibração de SPL.
-- **AutoEQ apenas paramétrico.** Arquivos GraphicEQ e respostas de impulso (FIR) não são importados.
+- **AutoEQ apenas paramétrico.** TXT (AutoEQ), JSON (AutoEQ) e JSON (OPRA) são aceitos; GraphicEQ, eqAPO e respostas de impulso (FIR) não são importados.
 - **O perfil por foto é uma estimativa geométrica, não uma HRTF.** Ele depende de enquadramento, iluminação e da máscara de pele, e o mapeamento para três filtros é heurístico. Foi validado com o modelo real em três fotos de orelha; não há validação clínica nem medição individual. Trate a curva como ponto de partida e use **Remover perfil** ou **Restaurar padrões** para voltar atrás.
 - **Sem marcos anatômicos nomeados e sem redes neurais no áudio.** O app não detecta hélice/anti-hélice/lóbulo como pontos (o MediaPipe Face Landmarker não modela a pinna), não gera HRTF individual e não usa LSTM/Transformer nem convolução: o perfil por foto produz somente três filtros peaking e um preamp.
-- **Perfis de fone embutidos são curvas de referência**, não medições.
+- **Perfis de fone embutidos são correções derivadas de medições públicas**, convertidas para o modelo paramétrico do AutoEQ — não são medições da sua unidade. Vedação, almofadas, variação de lote e encaixe mudam o resultado.
 - **Bluetooth** adiciona latência fora do controle do app; sincronizar vídeo pode exigir ajustes no player.
 - **Volume sincronizado e bateria são recursos do Windows.** No macOS e no Linux o volume master permanece dentro do DSP e não há leitura de bateria; o chip não aparece.
 - **Bateria depende do relatório do fabricante.** O app lê o relatório HID de carga quando existe; modelos que só expõem a carga no aplicativo do fabricante não mostram o nível.

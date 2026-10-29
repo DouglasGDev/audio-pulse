@@ -202,8 +202,7 @@ impl Processor {
                     .set_filters(&new.ear_profile.filters, self.sample_rate);
                 self.tone
                     .set_params(self.sample_rate, new.tone.mid_db, new.tone.treble_db);
-                self.bass
-                    .set_params(new.bass.clone(), self.sample_rate);
+                self.bass.set_params(new.bass.clone(), self.sample_rate);
                 self.spatial
                     .set_params(new.spatial.clone(), self.sample_rate);
                 self.crossfeed
@@ -443,7 +442,12 @@ impl Processor {
     }
 
     pub fn latency_samples(&self) -> usize {
-        self.limiter.lookahead_samples()
+        // Bypass returns before the limiter, so no delay is added at all.
+        if self.bypass {
+            0
+        } else {
+            self.limiter.lookahead_samples()
+        }
     }
 
     pub fn reset(&mut self) {
@@ -503,9 +507,7 @@ mod tests {
         };
         params.eq_db[4] = 9.0;
         processor.set_params(&params);
-        let input: Vec<f32> = (0..2048)
-            .map(|i| (i as f32 * 0.013).sin() * 0.4)
-            .collect();
+        let input: Vec<f32> = (0..2048).map(|i| (i as f32 * 0.013).sin() * 0.4).collect();
         let mut buffer = Vec::with_capacity(2048);
         for x in &input {
             buffer.push(*x);
@@ -529,7 +531,9 @@ mod tests {
         processor.set_master_volume_enabled(false);
         processor.set_master_volume_enabled(true);
         let out = run_sine(&mut processor, 440.0, 0.4, 0.1);
-        let peak = out.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+        let peak = out
+            .iter()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
         assert!(
             (peak - 0.1).abs() < 0.005,
             "bypass dropped the master gain: peak {peak}"
@@ -627,8 +631,13 @@ mod tests {
 
         processor.set_master_volume_enabled(false);
         let out = run_sine(&mut processor, 440.0, 0.25, 0.1);
-        let peak = out.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-        assert!(peak > 0.2, "delegated master still scaled the signal: {peak}");
+        let peak = out
+            .iter()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+        assert!(
+            peak > 0.2,
+            "delegated master still scaled the signal: {peak}"
+        );
 
         processor.set_master_volume_enabled(true);
         let out = run_sine(&mut processor, 440.0, 0.25, 0.1);
@@ -704,10 +713,7 @@ mod tests {
 
         let db = |a: f64, b: f64| 20.0 * (a / b).log10();
 
-        let auto_gain = db(
-            run(true, false, 1_000.0),
-            run(false, false, 1_000.0),
-        );
+        let auto_gain = db(run(true, false, 1_000.0), run(false, false, 1_000.0));
         let auto_gain_with_ear = db(run(true, true, 1_000.0), run(false, true, 1_000.0));
         assert!(
             (auto_gain - auto_gain_with_ear).abs() < 0.05,
@@ -796,6 +802,48 @@ mod tests {
         assert!(out.iter().all(|sample| sample.is_finite()));
         assert_eq!(processor.params.eq_db, second.eq_db);
         assert_eq!(processor.transition, Transition::Idle);
+    }
+
+    #[test]
+    fn reported_latency_matches_the_measured_delay() {
+        let mut processor = Processor::new(48_000.0);
+        let params = ProcessingParams {
+            volume: 1.0,
+            ..Default::default()
+        };
+        processor.set_params(&params);
+        let reported = processor.latency_samples();
+        assert_eq!(reported, (48_000.0f32 * 0.005).ceil() as usize);
+
+        let mut buffer = vec![0.0f32; 1_024 * 2];
+        buffer[0] = 0.5;
+        buffer[1] = 0.5;
+        processor.process_interleaved(&mut buffer);
+        let first = buffer
+            .chunks_exact(2)
+            .position(|frame| frame[0].abs() > 1e-6)
+            .expect("the impulse vanished");
+        assert_eq!(
+            first, reported,
+            "reported {reported} samples of latency but the impulse arrived at {first}"
+        );
+
+        // Bypass returns before the limiter; the reported delay must follow.
+        let bypassed = ProcessingParams {
+            bypass: true,
+            volume: 1.0,
+            ..Default::default()
+        };
+        processor.set_params(&bypassed);
+        assert_eq!(processor.latency_samples(), 0);
+        let mut buffer = vec![0.0f32; 512 * 2];
+        buffer[2] = 0.5;
+        buffer[3] = 0.5;
+        processor.process_interleaved(&mut buffer);
+        assert!(
+            buffer[2] > 1e-6 && buffer[3] > 1e-6,
+            "bypass still delayed the signal"
+        );
     }
 
     fn protection_params(enabled: bool, intensity: f32) -> ProcessingParams {

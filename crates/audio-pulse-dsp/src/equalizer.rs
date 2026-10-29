@@ -3,7 +3,9 @@
 use crate::biquad::Biquad;
 use crate::params::{AutoEqFilter, FilterKind, EQ_BAND_COUNT, EQ_FREQUENCIES, MAX_AUTOEQ_FILTERS};
 
-const EQ_Q: f32 = 1.41;
+/// Bandwidth of the graphic EQ bands. Presets evaluate the same cascade when
+/// computing their static headroom, so the two must not drift apart.
+pub const EQ_Q: f32 = 1.41;
 
 pub struct GraphicEq {
     left: [Biquad; EQ_BAND_COUNT],
@@ -25,8 +27,8 @@ impl GraphicEq {
     pub fn set_gains(&mut self, gains: &[f32; EQ_BAND_COUNT], sample_rate: f32) {
         self.gains = *gains;
         for (i, &freq) in EQ_FREQUENCIES.iter().enumerate() {
-            self.left[i] = Biquad::peaking(sample_rate, freq, gains[i], EQ_Q);
-            self.right[i] = Biquad::peaking(sample_rate, freq, gains[i], EQ_Q);
+            self.left[i].set_peaking(sample_rate, freq, gains[i], EQ_Q);
+            self.right[i].set_peaking(sample_rate, freq, gains[i], EQ_Q);
         }
     }
 
@@ -67,20 +69,30 @@ impl ParametricEq {
     pub fn set_filters(&mut self, filters: &[AutoEqFilter], sample_rate: f32) {
         self.count = filters.len().min(MAX_AUTOEQ_FILTERS);
         for (i, filter) in filters.iter().take(self.count).enumerate() {
-            let make = || match filter.kind {
+            // Retuning keeps the delay memory so moving a slider or swapping
+            // a correction curve does not restart the filter from silence.
+            match filter.kind {
                 FilterKind::Peaking => {
-                    Biquad::peaking(sample_rate, filter.freq, filter.gain_db, filter.q)
+                    self.left[i].set_peaking(sample_rate, filter.freq, filter.gain_db, filter.q);
+                    self.right[i].set_peaking(sample_rate, filter.freq, filter.gain_db, filter.q);
                 }
                 FilterKind::Lowshelf => {
-                    Biquad::low_shelf(sample_rate, filter.freq, filter.gain_db, filter.q)
+                    self.left[i].set_low_shelf(sample_rate, filter.freq, filter.gain_db, filter.q);
+                    self.right[i].set_low_shelf(sample_rate, filter.freq, filter.gain_db, filter.q);
                 }
                 FilterKind::Highshelf => {
-                    Biquad::high_shelf(sample_rate, filter.freq, filter.gain_db, filter.q)
+                    self.left[i].set_high_shelf(sample_rate, filter.freq, filter.gain_db, filter.q);
+                    self.right[i].set_high_shelf(
+                        sample_rate,
+                        filter.freq,
+                        filter.gain_db,
+                        filter.q,
+                    );
                 }
-            };
-            self.left[i] = make();
-            self.right[i] = make();
+            }
         }
+        // A section that leaves the set starts from an empty memory; keeping
+        // stale state into the next curve would be worse than a cleared one.
         for i in self.count..MAX_AUTOEQ_FILTERS {
             self.left[i] = Biquad::identity();
             self.right[i] = Biquad::identity();
@@ -134,10 +146,12 @@ impl ToneStage {
     }
 
     pub fn set_params(&mut self, sample_rate: f32, mid_db: f32, treble_db: f32) {
-        self.mid_l = Biquad::peaking(sample_rate, 1_500.0, mid_db, 0.75);
-        self.mid_r = Biquad::peaking(sample_rate, 1_500.0, mid_db, 0.75);
-        self.high_l = Biquad::high_shelf(sample_rate, 6_000.0, treble_db, 0.707);
-        self.high_r = Biquad::high_shelf(sample_rate, 6_000.0, treble_db, 0.707);
+        self.mid_l.set_peaking(sample_rate, 1_500.0, mid_db, 0.75);
+        self.mid_r.set_peaking(sample_rate, 1_500.0, mid_db, 0.75);
+        self.high_l
+            .set_high_shelf(sample_rate, 6_000.0, treble_db, 0.707);
+        self.high_r
+            .set_high_shelf(sample_rate, 6_000.0, treble_db, 0.707);
     }
 
     #[inline]
@@ -174,5 +188,87 @@ mod tests {
         }
         let gain = 20.0 * (rms(&out) / 0.1 * 2.0f32.sqrt()).log10();
         assert!(gain > 4.0, "expected > 4 dB, measured {gain}");
+    }
+
+    /// Re-applying the same settings must not touch the delay memory: an EQ
+    /// that reallocates its biquads on every UI update restarts every band
+    /// from silence and clicks. Comparing against an untouched twin proves
+    /// the state survived sample for sample.
+    #[test]
+    fn retuning_keeps_the_filter_memory() {
+        let sr = 48_000.0;
+        let tone = |i: usize| 0.3 * (2.0 * std::f32::consts::PI * 1_000.0 * i as f32 / sr).sin();
+
+        let gains = [2.0, 1.0, 0.0, -1.0, 0.5, 0.0, 1.5, 2.5, 1.0, -2.0];
+        let mut graphic = GraphicEq::new(sr);
+        let mut twin = GraphicEq::new(sr);
+        graphic.set_gains(&gains, sr);
+        twin.set_gains(&gains, sr);
+        for i in 0..4_800 {
+            let x = tone(i);
+            graphic.process(x, x);
+            twin.process(x, x);
+        }
+        graphic.set_gains(&gains, sr);
+        for i in 4_800..4_812 {
+            let x = tone(i);
+            assert_eq!(
+                graphic.process(x, x),
+                twin.process(x, x),
+                "graphic EQ dropped its state at sample {i}"
+            );
+        }
+
+        let filters = vec![
+            AutoEqFilter {
+                kind: FilterKind::Peaking,
+                freq: 3_000.0,
+                gain_db: 4.0,
+                q: 1.2,
+            },
+            AutoEqFilter {
+                kind: FilterKind::Lowshelf,
+                freq: 100.0,
+                gain_db: -3.0,
+                q: 0.707,
+            },
+        ];
+        let mut parametric = ParametricEq::new();
+        let mut twin = ParametricEq::new();
+        parametric.set_filters(&filters, sr);
+        twin.set_filters(&filters, sr);
+        for i in 0..4_800 {
+            let x = tone(i);
+            parametric.process(x, x);
+            twin.process(x, x);
+        }
+        parametric.set_filters(&filters, sr);
+        for i in 4_800..4_812 {
+            let x = tone(i);
+            assert_eq!(
+                parametric.process(x, x),
+                twin.process(x, x),
+                "parametric EQ dropped its state at sample {i}"
+            );
+        }
+
+        let mut tone_stage = ToneStage::new(sr);
+        let mut twin = ToneStage::new(sr);
+        tone_stage.set_params(sr, 3.0, -2.0);
+        twin.set_params(sr, 3.0, -2.0);
+        for i in 0..4_800 {
+            let x = tone(i);
+            tone_stage.process(x, x);
+            twin.process(x, x);
+        }
+        tone_stage.set_params(sr, 3.0, -2.0);
+        for i in 4_800..4_812 {
+            let x = tone(i);
+            assert_eq!(
+                tone_stage.process(x, x),
+                twin.process(x, x),
+                "tone stage dropped its state at sample {i}"
+            );
+        }
     }
 }

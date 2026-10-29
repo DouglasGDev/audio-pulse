@@ -74,7 +74,8 @@ pub fn run() {
                 for warning in shortcuts::register(&handle, &initial_settings) {
                     state.push_warning(warning);
                 }
-                if let Err(message) = commands::apply_autostart(&handle, initial_settings.autostart) {
+                if let Err(message) = commands::apply_autostart(&handle, initial_settings.autostart)
+                {
                     state.push_warning(message);
                 }
                 let master = state.params().volume;
@@ -135,8 +136,7 @@ pub fn run() {
 fn shortcut_plugin() -> TauriPlugin<tauri::Wry> {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
-            let pressed =
-                event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed;
+            let pressed = event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed;
             shortcuts::handle(app, shortcut, pressed);
         })
         .build()

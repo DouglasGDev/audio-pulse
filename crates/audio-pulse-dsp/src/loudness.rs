@@ -5,6 +5,13 @@
 //! equal-loudness contour at a 80 phon reference and the contour at the level
 //! implied by the current master volume, normalize it at 1 kHz and implement
 //! the resulting curve with ten peaking filters.
+//!
+//! The curve is a *relative* contour, so it would stack up to +18 dB of boost
+//! on top of everything else at low volumes. To keep the chain headroom-safe,
+//! the stage subtracts the curve's largest boost from the whole signal: the
+//! tonal balance is preserved, but the output never exceeds the input peak.
+//! The level trim is smoothed over 20 ms so moving the volume slider does not
+//! step the waveform.
 
 use crate::biquad::Biquad;
 use crate::params::{EQ_BAND_COUNT, EQ_FREQUENCIES};
@@ -22,8 +29,8 @@ const ALPHA: [f64; 29] = [
 ];
 
 const L_U: [f64; 29] = [
-    -31.6, -27.2, -23.0, -19.1, -15.9, -13.0, -10.3, -8.1, -6.2, -4.5, -3.1, -2.0, -1.1, -0.4,
-    0.0, 0.3, 0.5, 0.0, -2.7, -4.1, -1.0, 1.7, 2.5, 1.2, -2.1, -7.1, -11.2, -10.7, -3.1,
+    -31.6, -27.2, -23.0, -19.1, -15.9, -13.0, -10.3, -8.1, -6.2, -4.5, -3.1, -2.0, -1.1, -0.4, 0.0,
+    0.3, 0.5, 0.0, -2.7, -4.1, -1.0, 1.7, 2.5, 1.2, -2.1, -7.1, -11.2, -10.7, -3.1,
 ];
 
 const T_F: [f64; 29] = [
@@ -88,6 +95,9 @@ pub struct LoudnessStage {
     enabled: bool,
     volume: f32,
     intensity: f32,
+    trim_target: f32,
+    trim_current: f32,
+    trim_coeff: f32,
 }
 
 impl LoudnessStage {
@@ -98,18 +108,15 @@ impl LoudnessStage {
             enabled: false,
             volume: 1.0,
             intensity: 0.0,
+            trim_target: 1.0,
+            trim_current: 1.0,
+            trim_coeff: 1.0 - (-1.0 / (0.020 * sample_rate.max(8_000.0))).exp(),
         };
         stage.set_params(sample_rate, 1.0, 0.0, false);
         stage
     }
 
-    pub fn set_params(
-        &mut self,
-        sample_rate: f32,
-        volume: f32,
-        intensity: f32,
-        enabled: bool,
-    ) {
+    pub fn set_params(&mut self, sample_rate: f32, volume: f32, intensity: f32, enabled: bool) {
         let changed = (self.volume - volume).abs() > 0.002
             || (self.intensity - intensity).abs() > 0.002
             || self.enabled != enabled;
@@ -124,14 +131,20 @@ impl LoudnessStage {
                 self.left[i] = Biquad::identity();
                 self.right[i] = Biquad::identity();
             }
+            self.trim_target = 1.0;
+            self.trim_current = 1.0;
             return;
         }
         let gains = compensation_curve(volume, intensity);
+        let max_boost = gains.iter().cloned().fold(0.0f32, f32::max);
+        self.trim_target = 10f32.powf(-max_boost.max(0.0) / 20.0);
         for i in 0..EQ_BAND_COUNT {
             // Broad overlapping filters approximate the smooth ISO contour.
+            // Retuning keeps the filter memory, so volume changes do not
+            // restart the state and click.
             let q = 1.15;
-            self.left[i] = Biquad::peaking(sample_rate, EQ_FREQUENCIES[i], gains[i], q);
-            self.right[i] = Biquad::peaking(sample_rate, EQ_FREQUENCIES[i], gains[i], q);
+            self.left[i].set_peaking(sample_rate, EQ_FREQUENCIES[i], gains[i], q);
+            self.right[i].set_peaking(sample_rate, EQ_FREQUENCIES[i], gains[i], q);
         }
     }
 
@@ -144,7 +157,13 @@ impl LoudnessStage {
             l = self.left[i].process(l);
             r = self.right[i].process(r);
         }
-        (l, r)
+        self.trim_current += (self.trim_target - self.trim_current) * self.trim_coeff;
+        (l * self.trim_current, r * self.trim_current)
+    }
+
+    /// Linear trim currently applied after the contour. Exposed for tests.
+    pub fn current_trim(&self) -> f32 {
+        self.trim_current
     }
 
     pub fn reset(&mut self) {
@@ -177,5 +196,51 @@ mod tests {
         assert!(quiet[0] > 2.0, "low boost {:?}", quiet);
         assert!(quiet[EQ_BAND_COUNT - 1] > 1.0, "high boost {:?}", quiet);
         assert!(quiet[5].abs() < 1.0, "mid should stay flat {:?}", quiet);
+    }
+
+    fn stage_output_peak(volume: f32, freq: f32, amp: f32) -> (f32, f32) {
+        let sr = 48_000.0f32;
+        let mut stage = LoudnessStage::new(sr);
+        stage.set_params(sr, volume, 1.0, true);
+        let mut peak = 0.0f32;
+        let mut rms = 0.0f64;
+        let mut count = 0usize;
+        let frames = 48_000;
+        for i in 0..frames {
+            let x = amp * (2.0 * std::f32::consts::PI * freq * i as f32 / sr).sin();
+            let (l, _) = stage.process(x, x);
+            if i >= frames / 2 {
+                peak = peak.max(l.abs());
+                rms += (l as f64) * (l as f64);
+                count += 1;
+            }
+        }
+        (peak, (rms / count as f64).sqrt() as f32)
+    }
+
+    #[test]
+    fn quiet_playback_never_exceeds_the_input_peak() {
+        let (peak, _) = stage_output_peak(0.25, 1_000.0, 0.99);
+        assert!(
+            peak <= 1.0,
+            "loudness stage overshot with full-scale input: {peak}"
+        );
+    }
+
+    #[test]
+    fn quiet_playback_keeps_the_relative_bass_boost() {
+        let sr = 48_000.0f32;
+        let mut stage = LoudnessStage::new(sr);
+        stage.set_params(sr, 0.25, 1.0, true);
+        for _ in 0..(sr as usize / 2) {
+            stage.process(0.0, 0.0);
+        }
+        let trim_db = 20.0 * stage.current_trim().log10();
+        let gains = compensation_curve(0.25, 1.0);
+        let peak_boost = gains.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            (trim_db + peak_boost).abs() < 0.05,
+            "trim {trim_db} dB does not match the curve peak +{peak_boost} dB"
+        );
     }
 }

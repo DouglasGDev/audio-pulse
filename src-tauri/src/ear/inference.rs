@@ -49,8 +49,16 @@ fn build_session() -> Result<Session, String> {
     log::info!(
         "depth model loaded ({} threads): inputs {:?}, outputs {:?}",
         threads,
-        session.inputs().iter().map(|input| input.name()).collect::<Vec<_>>(),
-        session.outputs().iter().map(|output| output.name()).collect::<Vec<_>>()
+        session
+            .inputs()
+            .iter()
+            .map(|input| input.name())
+            .collect::<Vec<_>>(),
+        session
+            .outputs()
+            .iter()
+            .map(|output| output.name())
+            .collect::<Vec<_>>()
     );
     Ok(session)
 }

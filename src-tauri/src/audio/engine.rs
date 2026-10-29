@@ -8,20 +8,25 @@
 use crate::audio::devices;
 use crate::models::{EngineInfo, Telemetry};
 use arc_swap::ArcSwap;
+use audio_pulse_dsp::{
+    AnalysisSnapshot, ProcessingParams, Processor, ADAPTIVE_EQ_BANDS, SPECTRUM_BANDS,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{
+    BufferSize, Device, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig,
+};
 use parking_lot::Mutex;
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
-use audio_pulse_dsp::{AnalysisSnapshot, ProcessingParams, Processor, ADAPTIVE_EQ_BANDS, SPECTRUM_BANDS};
+use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::f64::consts::TAU;
 
-/// The look-ahead limiter delays the signal by 5 ms.
-const LOOKAHEAD_MS: f32 = 5.0;
+/// Stream latency is the buffer chain; the processor's own delay is measured
+/// from the DSP and added on top, so a change in look-ahead is reported
+/// without a second constant to keep in sync.
 const MIN_FRAMES: usize = 64;
 const MAX_FRAMES: usize = 16_384;
 
@@ -56,6 +61,8 @@ pub struct EngineShared {
     sample_rate: AtomicU32,
     buffer_ms: AtomicU32,
     latency_us: AtomicU32,
+    /// Delay contributed by the DSP chain itself, refreshed every block.
+    dsp_latency_us: AtomicU32,
     cpu_permille: AtomicU32,
     /// Current ring buffer fill, in stereo samples. Used as drift feedback.
     fill_samples: AtomicU32,
@@ -79,6 +86,7 @@ impl EngineShared {
             sample_rate: AtomicU32::new(0),
             buffer_ms: AtomicU32::new(25),
             latency_us: AtomicU32::new(0),
+            dsp_latency_us: AtomicU32::new(0),
             cpu_permille: AtomicU32::new(0),
             fill_samples: AtomicU32::new(0),
             xruns: AtomicU64::new(0),
@@ -100,7 +108,9 @@ impl EngineShared {
             input_device: self.input_name.lock().clone(),
             output_device: self.output_name.lock().clone(),
             buffer_ms: self.buffer_ms.load(Ordering::Relaxed),
-            latency_ms: self.latency_us.load(Ordering::Relaxed) as f32 / 1_000.0,
+            latency_ms: (self.latency_us.load(Ordering::Relaxed)
+                + self.dsp_latency_us.load(Ordering::Relaxed)) as f32
+                / 1_000.0,
             cpu_percent: self.cpu_permille.load(Ordering::Relaxed) as f32 / 10.0,
             xruns: self.xruns.load(Ordering::Relaxed),
             error: self.error.lock().clone(),
@@ -264,6 +274,7 @@ impl EngineThread {
         shared.running.store(false, Ordering::Relaxed);
         shared.sample_rate.store(0, Ordering::Relaxed);
         shared.latency_us.store(0, Ordering::Relaxed);
+        shared.dsp_latency_us.store(0, Ordering::Relaxed);
         shared.cpu_permille.store(0, Ordering::Relaxed);
         shared.fill_samples.store(0, Ordering::Relaxed);
         *shared.mode.lock() = "stopped".into();
@@ -370,7 +381,7 @@ impl EngineThread {
             .play()
             .map_err(|e| format!("Falha ao iniciar a captura de áudio: {e}"))?;
 
-        let latency = (frames_request as f32 * 3.0 / rate as f32) * 1_000.0 + LOOKAHEAD_MS;
+        let latency = (frames_request as f32 * 3.0 / rate as f32) * 1_000.0;
         self.shared.buffer_ms.store(buffer_ms, Ordering::Relaxed);
         self.shared.sample_rate.store(rate, Ordering::Relaxed);
         *self.shared.input_name.lock() = Some(input_name);
@@ -417,7 +428,7 @@ impl EngineThread {
             .play()
             .map_err(|e| format!("Falha ao iniciar a saída de áudio: {e}"))?;
 
-        let latency = (frames_request as f32 / rate as f32) * 1_000.0 + LOOKAHEAD_MS;
+        let latency = (frames_request as f32 / rate as f32) * 1_000.0;
         let label = match source {
             PreviewSource::Noise => "preview-noise",
             PreviewSource::Sweep => "preview-sweep",
@@ -446,14 +457,19 @@ fn frames_for(rate: u32, buffer_ms: u32) -> usize {
 
 fn choose_buffer_size(supported: &cpal::SupportedBufferSize, frames: usize) -> BufferSize {
     match supported {
-        cpal::SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&(frames as u32)) => {
+        cpal::SupportedBufferSize::Range { min, max }
+            if (*min..=*max).contains(&(frames as u32)) =>
+        {
             BufferSize::Fixed(frames as u32)
         }
         _ => BufferSize::Default,
     }
 }
 
-fn resolve_output(host: &cpal::Host, requested: &Option<String>) -> Result<(Device, String), String> {
+fn resolve_output(
+    host: &cpal::Host,
+    requested: &Option<String>,
+) -> Result<(Device, String), String> {
     let (name, from_default) = match requested {
         Some(name) => (name.clone(), false),
         None => (
@@ -474,7 +490,10 @@ fn resolve_output(host: &cpal::Host, requested: &Option<String>) -> Result<(Devi
     Ok((device, name))
 }
 
-fn resolve_input(host: &cpal::Host, requested: &Option<String>) -> Result<(Device, String), String> {
+fn resolve_input(
+    host: &cpal::Host,
+    requested: &Option<String>,
+) -> Result<(Device, String), String> {
     let name = match requested {
         Some(name) => name.clone(),
         None => {
@@ -514,10 +533,18 @@ fn build_output_stream(
     on_error: ErrorCallback,
 ) -> Result<Stream, String> {
     match format {
-        SampleFormat::F32 => build_output_typed::<f32>(device, config, initial_frames, fill, on_error),
-        SampleFormat::I16 => build_output_typed::<i16>(device, config, initial_frames, fill, on_error),
-        SampleFormat::U16 => build_output_typed::<u16>(device, config, initial_frames, fill, on_error),
-        SampleFormat::I32 => build_output_typed::<i32>(device, config, initial_frames, fill, on_error),
+        SampleFormat::F32 => {
+            build_output_typed::<f32>(device, config, initial_frames, fill, on_error)
+        }
+        SampleFormat::I16 => {
+            build_output_typed::<i16>(device, config, initial_frames, fill, on_error)
+        }
+        SampleFormat::U16 => {
+            build_output_typed::<u16>(device, config, initial_frames, fill, on_error)
+        }
+        SampleFormat::I32 => {
+            build_output_typed::<i32>(device, config, initial_frames, fill, on_error)
+        }
         other => Err(format!("Formato de saída não suportado: {other:?}")),
     }
 }
@@ -657,9 +684,7 @@ fn make_route_fill(
         if available > high_water {
             // The input clock is ahead; drop the oldest audio to bound latency.
             consumer.skip(available - prime_samples);
-            log::debug!(
-                "ring overrun: {available} samples buffered, trimmed to {prime_samples}"
-            );
+            log::debug!("ring overrun: {available} samples buffered, trimmed to {prime_samples}");
             shared.xruns.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -675,7 +700,15 @@ fn make_route_fill(
 
         apply_params(&mut processor, &shared, &mut last_params);
         processor.process_interleaved(out);
-        publish(&shared, &processor.analysis(), started, out.len() / 2, rate, &mut cpu);
+        publish_dsp_latency(&shared, &processor, rate);
+        publish(
+            &shared,
+            &processor.analysis(),
+            started,
+            out.len() / 2,
+            rate,
+            &mut cpu,
+        );
     })
 }
 
@@ -758,8 +791,21 @@ fn make_preview_fill(
         preview.fill(out);
         apply_params(&mut processor, &shared, &mut last_params);
         processor.process_interleaved(out);
-        publish(&shared, &processor.analysis(), started, out.len() / 2, rate, &mut cpu);
+        publish_dsp_latency(&shared, &processor, rate);
+        publish(
+            &shared,
+            &processor.analysis(),
+            started,
+            out.len() / 2,
+            rate,
+            &mut cpu,
+        );
     })
+}
+
+fn publish_dsp_latency(shared: &EngineShared, processor: &Processor, rate: u32) {
+    let us = (processor.latency_samples() as f64 * 1_000_000.0 / rate.max(1) as f64) as u32;
+    shared.dsp_latency_us.store(us, Ordering::Relaxed);
 }
 
 fn apply_params(
@@ -795,7 +841,9 @@ fn publish_idle(shared: &EngineShared, rate: u32) {
     telemetry.protection_gr_db = 0.0;
     telemetry.adaptive_gains_db = [0.0; ADAPTIVE_EQ_BANDS];
     telemetry.cpu_percent = shared.cpu_permille.load(Ordering::Relaxed) as f32 / 10.0;
-    telemetry.latency_ms = shared.latency_us.load(Ordering::Relaxed) as f32 / 1_000.0;
+    telemetry.latency_ms = (shared.latency_us.load(Ordering::Relaxed)
+        + shared.dsp_latency_us.load(Ordering::Relaxed)) as f32
+        / 1_000.0;
     telemetry.xruns = shared.xruns.load(Ordering::Relaxed);
     telemetry.running = shared.running.load(Ordering::Relaxed);
     telemetry.sample_rate = rate;
@@ -817,7 +865,9 @@ fn publish(
         .store((cpu.clamp(0.0, 10.0) * 1_000.0) as u32, Ordering::Relaxed);
 
     let mut telemetry = shared.telemetry.lock();
-    telemetry.bands.copy_from_slice(&analysis.bands[..SPECTRUM_BANDS]);
+    telemetry
+        .bands
+        .copy_from_slice(&analysis.bands[..SPECTRUM_BANDS]);
     telemetry.rms_l = analysis.rms_l;
     telemetry.rms_r = analysis.rms_r;
     telemetry.peak_l = analysis.peak_l;
@@ -827,7 +877,9 @@ fn publish(
     telemetry.protection_gr_db = analysis.protection_gr_db;
     telemetry.adaptive_gains_db = analysis.adaptive_gains_db;
     telemetry.cpu_percent = (*cpu * 100.0).min(1000.0);
-    telemetry.latency_ms = shared.latency_us.load(Ordering::Relaxed) as f32 / 1_000.0;
+    telemetry.latency_ms = (shared.latency_us.load(Ordering::Relaxed)
+        + shared.dsp_latency_us.load(Ordering::Relaxed)) as f32
+        / 1_000.0;
     telemetry.xruns = shared.xruns.load(Ordering::Relaxed);
     telemetry.running = shared.running.load(Ordering::Relaxed);
     telemetry.sample_rate = rate;
@@ -895,7 +947,9 @@ impl Preview {
                     let progress = *time / DURATION;
                     let freq = 20.0 * 1_000.0f32.powf(progress);
                     *phase = (*phase + TAU as f32 * freq / *sample_rate) % (TAU as f32);
-                    let envelope = (*time / FADE).min((DURATION - *time) / FADE).clamp(0.0, 1.0);
+                    let envelope = (*time / FADE)
+                        .min((DURATION - *time) / FADE)
+                        .clamp(0.0, 1.0);
                     let sample = phase.sin() * 0.3 * envelope;
                     frame[0] = sample;
                     frame[1] = sample;
@@ -957,8 +1011,8 @@ impl PinkNoise {
         self.b3 = 0.86650 * self.b3 + white * 0.3104856;
         self.b4 = 0.55000 * self.b4 + white * 0.5329522;
         self.b5 = -0.7616 * self.b5 - white * 0.0168980;
-        let pink = self.b0 + self.b1 + self.b2 + self.b3 + self.b4 + self.b5 + self.b6
-            + white * 0.5362;
+        let pink =
+            self.b0 + self.b1 + self.b2 + self.b3 + self.b4 + self.b5 + self.b6 + white * 0.5362;
         self.b6 = white * 0.115926;
         pink * 0.11
     }

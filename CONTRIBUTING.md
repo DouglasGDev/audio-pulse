@@ -23,12 +23,17 @@ license.
 
 ```bash
 cargo test --workspace
+cargo test -p audio-pulse-dsp --test baseline -- --nocapture
 npm run build
 ```
 
-For interface changes, run the real app (`npm run tauri dev`) and describe what
-you tested. For DSP changes, add or update a test that proves the behavior, not
-just that the output is finite.
+The baseline harness prints the numbers a listener experiences — reported
+latency, true-peak margin, kick handling, protection flatness and preset
+headroom — so a change can be compared against them. A baseline failure means
+the behavior changed; either fix the stage or update the expectation and explain
+the delta in the PR. For interface changes, run the real app
+(`npm run tauri dev`) and describe what you tested. For DSP changes, add or
+update a test that proves the behavior, not just that the output is finite.
 
 ## Style
 
