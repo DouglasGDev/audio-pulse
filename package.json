@@ -1,7 +1,7 @@
 {
   "name": "audio-pulse",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "System-wide DSP for any headphones: 10-band EQ, parametric AutoEQ, bass synthesis, spatial audio and local AI ear profiling",
   "license": "GPL-3.0-or-later",

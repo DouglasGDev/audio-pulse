@@ -45,6 +45,7 @@ pub fn run() {
             commands::apply_preset,
             commands::save_preset,
             commands::delete_preset,
+            commands::restore_sound_defaults,
             commands::export_preset,
             commands::import_preset,
             commands::import_autoeq,
@@ -87,6 +88,7 @@ pub fn run() {
             spawn_telemetry(handle.clone());
             spawn_device_watch(handle.clone());
             spawn_volume_watch(handle.clone());
+            spawn_route_watch(handle.clone());
             spawn_battery_watch(handle.clone());
             spawn_auto_start(handle.clone());
 
@@ -164,6 +166,20 @@ fn spawn_auto_start(app: AppHandle) {
             };
             state.auto_start_route();
             emit_view(&app, &state);
+        });
+}
+
+/// Keeps the route alive when a headset is plugged in, disconnected, or when
+/// Windows hands the default output to another endpoint.
+fn spawn_route_watch(app: AppHandle) {
+    let _ = thread::Builder::new()
+        .name("audio-pulse-route".into())
+        .spawn(move || loop {
+            thread::sleep(Duration::from_millis(1500));
+            let Some(state) = app.try_state::<AppState>() else {
+                break;
+            };
+            state.supervise_route(&app);
         });
 }
 

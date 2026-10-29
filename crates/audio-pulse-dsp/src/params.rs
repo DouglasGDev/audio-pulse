@@ -167,6 +167,40 @@ impl Default for LoudnessParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
+pub struct LoudSoundReductionParams {
+    pub enabled: bool,
+    /// 0..1. Higher values lower the threshold and raise the ratio.
+    pub intensity: f32,
+}
+
+impl Default for LoudSoundReductionParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            intensity: 0.6,
+        }
+    }
+}
+
+impl LoudSoundReductionParams {
+    /// A slow, stereo-linked compressor acting after the master volume, so it
+    /// follows the level actually reaching the ears.
+    pub fn to_compressor(&self) -> CompressorParams {
+        let intensity = self.intensity.clamp(0.0, 1.0);
+        CompressorParams {
+            enabled: self.enabled && intensity > 0.01,
+            threshold_db: -10.0 - 14.0 * intensity,
+            ratio: 1.5 + 2.5 * intensity,
+            attack_ms: 5.0,
+            release_ms: 200.0,
+            knee_db: 8.0,
+            makeup_db: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SpatialParams {
     pub mode: SpatialMode,
     /// 0..1.5 virtual speaker spread.
@@ -239,6 +273,27 @@ impl Default for AutoEqParams {
     }
 }
 
+/// Personal correction measured from the user's ear photo. It has its own
+/// stage between AutoEQ and the graphic EQ, so it composes with every other
+/// correction instead of replacing the headphone profile.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EarProfileParams {
+    pub enabled: bool,
+    pub preamp_db: f32,
+    pub filters: Vec<AutoEqFilter>,
+}
+
+impl Default for EarProfileParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            preamp_db: 0.0,
+            filters: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProcessingParams {
@@ -249,10 +304,14 @@ pub struct ProcessingParams {
     pub compressor: CompressorParams,
     pub limiter: LimiterParams,
     pub loudness: LoudnessParams,
+    pub loud_sound_reduction: LoudSoundReductionParams,
     pub spatial: SpatialParams,
     pub crossfeed: CrossfeedParams,
     pub auto_eq: AutoEqParams,
     pub adaptive_eq: AdaptiveEqParams,
+    /// User-owned ear correction; presets never carry it (see
+    /// `apply_processing_from`).
+    pub ear_profile: EarProfileParams,
     /// Master output volume, linear 0..1.
     pub volume: f32,
     pub bypass: bool,
@@ -268,10 +327,12 @@ impl Default for ProcessingParams {
             compressor: CompressorParams::default(),
             limiter: LimiterParams::default(),
             loudness: LoudnessParams::default(),
+            loud_sound_reduction: LoudSoundReductionParams::default(),
             spatial: SpatialParams::default(),
             crossfeed: CrossfeedParams::default(),
             auto_eq: AutoEqParams::default(),
             adaptive_eq: AdaptiveEqParams::default(),
+            ear_profile: EarProfileParams::default(),
             volume: 1.0,
             bypass: false,
         }
@@ -318,6 +379,9 @@ impl ProcessingParams {
 
         self.loudness.intensity = clamp(self.loudness.intensity, 0.0, 1.0, 0.0);
 
+        self.loud_sound_reduction.intensity =
+            clamp(self.loud_sound_reduction.intensity, 0.0, 1.0, 0.6);
+
         self.spatial.width = clamp(self.spatial.width, 0.0, 1.5, 1.0);
         self.spatial.room = clamp(self.spatial.room, 0.0, 1.0, 0.35);
 
@@ -329,6 +393,14 @@ impl ProcessingParams {
         self.auto_eq.preamp_db = clamp(self.auto_eq.preamp_db, -24.0, 12.0, 0.0);
         self.auto_eq.filters.truncate(MAX_AUTOEQ_FILTERS);
         for filter in &mut self.auto_eq.filters {
+            filter.freq = clamp(filter.freq, 20.0, 20_000.0, 1_000.0);
+            filter.gain_db = clamp(filter.gain_db, -24.0, 24.0, 0.0);
+            filter.q = clamp(filter.q, 0.1, 18.0, 1.0);
+        }
+
+        self.ear_profile.preamp_db = clamp(self.ear_profile.preamp_db, -24.0, 12.0, 0.0);
+        self.ear_profile.filters.truncate(MAX_AUTOEQ_FILTERS);
+        for filter in &mut self.ear_profile.filters {
             filter.freq = clamp(filter.freq, 20.0, 20_000.0, 1_000.0);
             filter.gain_db = clamp(filter.gain_db, -24.0, 24.0, 0.0);
             filter.q = clamp(filter.q, 0.1, 18.0, 1.0);
@@ -349,6 +421,7 @@ impl ProcessingParams {
             && self.tone.treble_db.abs() < EPS
             && !self.compressor.enabled
             && !self.loudness.enabled
+            && !self.loud_sound_reduction.enabled
             && self.spatial.mode == SpatialMode::Off
             && !self.crossfeed.enabled
             && !self.adaptive_eq.enabled
@@ -356,7 +429,9 @@ impl ProcessingParams {
     }
 
     /// Copies the sound-shaping fields from another parameter set while
-    /// preserving user-owned master state (volume and bypass).
+    /// preserving user-owned state: master volume, bypass and the ear profile.
+    /// Hearing protection is part of the preset, so applying one switches it on
+    /// or off.
     pub fn apply_processing_from(&mut self, other: &Self) {
         self.preamp_db = other.preamp_db;
         self.eq_db = other.eq_db;
@@ -365,6 +440,7 @@ impl ProcessingParams {
         self.compressor = other.compressor.clone();
         self.limiter = other.limiter.clone();
         self.loudness = other.loudness.clone();
+        self.loud_sound_reduction = other.loud_sound_reduction.clone();
         self.spatial = other.spatial.clone();
         self.crossfeed = other.crossfeed.clone();
         self.auto_eq = other.auto_eq.clone();
@@ -382,11 +458,13 @@ mod tests {
         p.eq_db[0] = f32::NAN;
         p.preamp_db = 99.0;
         p.bass.cutoff_hz = 10.0;
+        p.loud_sound_reduction.intensity = f32::NAN;
         p.auto_eq.filters = vec![AutoEqFilter::default(); 30];
         let p = p.sanitized();
         assert_eq!(p.eq_db[0], 0.0);
         assert_eq!(p.preamp_db, 12.0);
         assert_eq!(p.bass.cutoff_hz, 30.0);
+        assert_eq!(p.loud_sound_reduction.intensity, 0.6);
         assert_eq!(p.auto_eq.filters.len(), MAX_AUTOEQ_FILTERS);
     }
 
@@ -402,18 +480,63 @@ mod tests {
     }
 
     #[test]
-    fn preset_apply_preserves_master_state() {
+    fn preset_apply_preserves_volume_and_bypass() {
         let mut current = ProcessingParams {
             volume: 0.42,
             bypass: true,
+            loud_sound_reduction: LoudSoundReductionParams {
+                enabled: true,
+                intensity: 0.8,
+            },
             ..Default::default()
         };
         let mut preset = ProcessingParams::default();
         preset.eq_db[0] = 6.0;
         preset.volume = 1.0;
+        preset.loud_sound_reduction = LoudSoundReductionParams::default();
         current.apply_processing_from(&preset);
         assert_eq!(current.volume, 0.42);
         assert!(current.bypass);
         assert_eq!(current.eq_db[0], 6.0);
+        assert!(!current.loud_sound_reduction.enabled);
+        assert_eq!(current.loud_sound_reduction.intensity, 0.6);
+    }
+
+    #[test]
+    fn preset_apply_preserves_the_ear_profile() {
+        let ear = EarProfileParams {
+            enabled: true,
+            preamp_db: -1.2,
+            filters: vec![AutoEqFilter {
+                kind: FilterKind::Peaking,
+                freq: 3_400.0,
+                gain_db: -2.0,
+                q: 1.15,
+            }],
+        };
+        let mut current = ProcessingParams {
+            ear_profile: ear.clone(),
+            ..Default::default()
+        };
+        let mut preset = ProcessingParams::default();
+        preset.bass.enabled = true;
+        // A stale preset that happens to carry another ear profile must not win.
+        preset.ear_profile.enabled = true;
+        preset.ear_profile.filters = vec![AutoEqFilter::default()];
+        current.apply_processing_from(&preset);
+        assert_eq!(current.ear_profile, ear);
+        assert!(current.bass.enabled);
+    }
+
+    #[test]
+    fn sanitizes_ear_profile_filters() {
+        let mut params = ProcessingParams::default();
+        params.ear_profile.filters = vec![AutoEqFilter::default(); 30];
+        params.ear_profile.filters[0].freq = f32::NAN;
+        params.ear_profile.preamp_db = -99.0;
+        let params = params.sanitized();
+        assert_eq!(params.ear_profile.filters.len(), MAX_AUTOEQ_FILTERS);
+        assert_eq!(params.ear_profile.filters[0].freq, 1_000.0);
+        assert_eq!(params.ear_profile.preamp_db, -24.0);
     }
 }

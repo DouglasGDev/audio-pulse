@@ -83,6 +83,11 @@ export function Dashboard() {
     { key: "stage.compressor", on: params.compressor.enabled, page: "dynamics" },
     { key: "stage.volume", on: volume > 0.001, page: "dashboard" },
     { key: "stage.loudness", on: params.loudness.enabled, page: "equalizer" },
+    {
+      key: "stage.protection",
+      on: params.loudSoundReduction.enabled && params.loudSoundReduction.intensity > 0.01,
+      page: "hearing",
+    },
     { key: "stage.limiter", on: params.limiter.enabled, page: "dynamics" },
   ];
 

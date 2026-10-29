@@ -4,6 +4,7 @@
 
 use crate::adaptive_eq::AdaptiveEqStage;
 use crate::bass::BassStage;
+use crate::biquad::Biquad;
 use crate::crossfeed::CrossfeedStage;
 use crate::dynamics::{Compressor, Limiter};
 use crate::equalizer::{GraphicEq, ParametricEq, ToneStage};
@@ -21,6 +22,7 @@ pub struct AnalysisSnapshot {
     pub peak_r: f32,
     pub compressor_gr_db: f32,
     pub limiter_gr_db: f32,
+    pub protection_gr_db: f32,
     pub adaptive_gains_db: [f32; ADAPTIVE_EQ_BANDS],
 }
 
@@ -34,6 +36,7 @@ impl Default for AnalysisSnapshot {
             peak_r: 0.0,
             compressor_gr_db: 0.0,
             limiter_gr_db: 0.0,
+            protection_gr_db: 0.0,
             adaptive_gains_db: [0.0; ADAPTIVE_EQ_BANDS],
         }
     }
@@ -65,14 +68,19 @@ pub struct Processor {
     fade_in_step: f32,
     preamp: f32,
     auto_preamp: f32,
+    ear_preamp: f32,
+    subsonic_l: [Biquad; 2],
+    subsonic_r: [Biquad; 2],
     graphic: GraphicEq,
     parametric: ParametricEq,
+    ear_profile: ParametricEq,
     tone: ToneStage,
     bass: BassStage,
     spatial: SpatialStage,
     crossfeed: CrossfeedStage,
     adaptive_eq: AdaptiveEqStage,
     compressor: Compressor,
+    protection: Compressor,
     limiter: Limiter,
     loudness: LoudnessStage,
     volume_current: f32,
@@ -103,14 +111,29 @@ impl Processor {
             fade_in_step: 1.0 / (DECLICK_FADE_IN_SECONDS * sr).max(1.0),
             preamp: 1.0,
             auto_preamp: 1.0,
+            ear_preamp: 1.0,
+            // DC and infrasound displace the diaphragm without being heard,
+            // which feels like pressure in the ears even at low volume. Two
+            // sections make a 4th-order Butterworth: steep below 20 Hz while
+            // leaving the audible bass above 31 Hz untouched.
+            subsonic_l: [
+                Biquad::high_pass(sr, 20.0, 0.5412),
+                Biquad::high_pass(sr, 20.0, 1.3066),
+            ],
+            subsonic_r: [
+                Biquad::high_pass(sr, 20.0, 0.5412),
+                Biquad::high_pass(sr, 20.0, 1.3066),
+            ],
             graphic: GraphicEq::new(sr),
             parametric: ParametricEq::new(),
+            ear_profile: ParametricEq::new(),
             tone: ToneStage::new(sr),
             bass: BassStage::new(sr),
             spatial: SpatialStage::new(sr),
             crossfeed: CrossfeedStage::new(sr),
             adaptive_eq: AdaptiveEqStage::new(sr),
             compressor: Compressor::new(sr),
+            protection: Compressor::new(sr),
             limiter: Limiter::new(sr),
             loudness: LoudnessStage::new(sr),
             volume_current: 1.0,
@@ -164,12 +187,19 @@ impl Processor {
         } else {
             1.0
         };
+        self.ear_preamp = if new.ear_profile.enabled {
+            db_to_lin(new.ear_profile.preamp_db)
+        } else {
+            1.0
+        };
 
         match &old {
             None => {
                 self.graphic.set_gains(&new.eq_db, self.sample_rate);
                 self.parametric
                     .set_filters(&new.auto_eq.filters, self.sample_rate);
+                self.ear_profile
+                    .set_filters(&new.ear_profile.filters, self.sample_rate);
                 self.tone
                     .set_params(self.sample_rate, new.tone.mid_db, new.tone.treble_db);
                 self.bass
@@ -182,6 +212,8 @@ impl Processor {
                     .set_params(new.adaptive_eq, self.sample_rate);
                 self.compressor
                     .set_params(new.compressor.clone(), self.sample_rate);
+                self.protection
+                    .set_params(new.loud_sound_reduction.to_compressor(), self.sample_rate);
                 self.limiter
                     .set_params(new.limiter.clone(), self.sample_rate);
             }
@@ -192,6 +224,10 @@ impl Processor {
                 if new.auto_eq != old.auto_eq {
                     self.parametric
                         .set_filters(&new.auto_eq.filters, self.sample_rate);
+                }
+                if new.ear_profile != old.ear_profile {
+                    self.ear_profile
+                        .set_filters(&new.ear_profile.filters, self.sample_rate);
                 }
                 if new.tone != old.tone {
                     self.tone
@@ -216,6 +252,10 @@ impl Processor {
                     self.compressor
                         .set_params(new.compressor.clone(), self.sample_rate);
                 }
+                if new.loud_sound_reduction != old.loud_sound_reduction {
+                    self.protection
+                        .set_params(new.loud_sound_reduction.to_compressor(), self.sample_rate);
+                }
                 if new.limiter != old.limiter {
                     self.limiter
                         .set_params(new.limiter.clone(), self.sample_rate);
@@ -223,6 +263,7 @@ impl Processor {
                 if new.bypass != old.bypass {
                     self.limiter.reset();
                     self.compressor.reset();
+                    self.protection.reset();
                 }
             }
         }
@@ -301,6 +342,13 @@ impl Processor {
             return (l, r);
         }
 
+        for filter in &mut self.subsonic_l {
+            l = filter.process(l);
+        }
+        for filter in &mut self.subsonic_r {
+            r = filter.process(r);
+        }
+
         let gain = self.preamp;
         l *= gain;
         r *= gain;
@@ -310,6 +358,13 @@ impl Processor {
             l *= g;
             r *= g;
             (l, r) = self.parametric.process(l, r);
+        }
+
+        if self.params.ear_profile.enabled {
+            let g = self.ear_preamp;
+            l *= g;
+            r *= g;
+            (l, r) = self.ear_profile.process(l, r);
         }
 
         (l, r) = self.graphic.process(l, r);
@@ -327,6 +382,7 @@ impl Processor {
         }
 
         (l, r) = self.loudness.process(l, r);
+        (l, r) = self.protection.process(l, r);
         (l, r) = self.limiter.process(l, r);
 
         if !l.is_finite() {
@@ -381,6 +437,7 @@ impl Processor {
             peak_r: self.levels.peak_r,
             compressor_gr_db: self.compressor.gain_reduction_db(),
             limiter_gr_db: self.limiter.gain_reduction_db(),
+            protection_gr_db: self.protection.gain_reduction_db(),
             adaptive_gains_db: self.adaptive_eq.gains_db(),
         }
     }
@@ -390,13 +447,21 @@ impl Processor {
     }
 
     pub fn reset(&mut self) {
+        for filter in &mut self.subsonic_l {
+            filter.reset();
+        }
+        for filter in &mut self.subsonic_r {
+            filter.reset();
+        }
         self.graphic.reset();
         self.parametric.reset();
+        self.ear_profile.reset();
         self.bass.reset();
         self.spatial.reset();
         self.crossfeed.reset();
         self.adaptive_eq.reset();
         self.compressor.reset();
+        self.protection.reset();
         self.limiter.reset();
         self.loudness.reset();
         self.levels.reset();
@@ -411,7 +476,8 @@ impl Processor {
 mod tests {
     use super::*;
     use crate::params::{
-        BassParams, CompressorParams, CrossfeedParams, LoudnessParams, SpatialMode, SpatialParams,
+        AutoEqFilter, BassParams, CompressorParams, CrossfeedParams, EarProfileParams, FilterKind,
+        LimiterParams, LoudSoundReductionParams, LoudnessParams, SpatialMode, SpatialParams,
     };
 
     fn run_sine(processor: &mut Processor, freq: f32, amp: f32, seconds: f32) -> Vec<f32> {
@@ -468,6 +534,38 @@ mod tests {
             (peak - 0.1).abs() < 0.005,
             "bypass dropped the master gain: peak {peak}"
         );
+    }
+
+    #[test]
+    fn dc_and_subsonic_never_reach_the_output() {
+        let params = ProcessingParams {
+            volume: 1.0,
+            ..Default::default()
+        };
+
+        let mut dc = Processor::new(48_000.0);
+        dc.set_params(&params);
+        let mut buffer = vec![0.5f32; 48_000 * 2];
+        dc.process_interleaved(&mut buffer);
+        let tail = &buffer[(48_000 - 12_000) * 2..];
+        let peak = tail.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(peak < 1e-3, "DC leaked to the output: {peak}");
+
+        let mut low = Processor::new(48_000.0);
+        low.set_params(&params);
+        let out = run_sine(&mut low, 5.0, 0.5, 4.0);
+        let tail = &out[(out.len() / 2 - 24_000)..];
+        let rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+        let gain_db = 20.0 * (rms / (0.5 / 2f32.sqrt())).log10();
+        assert!(gain_db < -18.0, "5 Hz passed at {gain_db} dB");
+
+        let mut mid = Processor::new(48_000.0);
+        mid.set_params(&params);
+        let out = run_sine(&mut mid, 1_000.0, 0.5, 1.0);
+        let tail = &out[(out.len() / 2 - 12_000)..];
+        let rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+        let gain_db = 20.0 * (rms / (0.5 / 2f32.sqrt())).log10();
+        assert!(gain_db.abs() < 0.1, "1 kHz changed by {gain_db} dB");
     }
 
     #[test]
@@ -568,6 +666,71 @@ mod tests {
     }
 
     #[test]
+    fn ear_profile_composes_with_autoeq() {
+        let autoeq = AutoEqFilter {
+            kind: FilterKind::Peaking,
+            freq: 1_000.0,
+            gain_db: 3.0,
+            q: 1.0,
+        };
+        let ear = AutoEqFilter {
+            kind: FilterKind::Peaking,
+            freq: 3_400.0,
+            gain_db: -6.0,
+            q: 1.15,
+        };
+        let run = |with_autoeq: bool, with_ear: bool, freq: f32| {
+            let mut processor = Processor::new(48_000.0);
+            let mut params = ProcessingParams {
+                limiter: LimiterParams {
+                    enabled: false,
+                    ..Default::default()
+                },
+                volume: 1.0,
+                ..Default::default()
+            };
+            params.auto_eq.enabled = with_autoeq;
+            params.auto_eq.filters = vec![autoeq];
+            if with_ear {
+                params.ear_profile = EarProfileParams {
+                    enabled: true,
+                    preamp_db: 0.0,
+                    filters: vec![ear],
+                };
+            }
+            processor.set_params(&params);
+            rms_of(&run_sine(&mut processor, freq, 0.2, 1.0))
+        };
+
+        let db = |a: f64, b: f64| 20.0 * (a / b).log10();
+
+        let auto_gain = db(
+            run(true, false, 1_000.0),
+            run(false, false, 1_000.0),
+        );
+        let auto_gain_with_ear = db(run(true, true, 1_000.0), run(false, true, 1_000.0));
+        assert!(
+            (auto_gain - auto_gain_with_ear).abs() < 0.05,
+            "the ear stage altered AutoEQ's 1 kHz gain: {auto_gain:.2} vs {auto_gain_with_ear:.2} dB"
+        );
+        assert!(
+            (auto_gain - 3.0).abs() < 0.5,
+            "AutoEQ was not active on its own band: {auto_gain:.2} dB"
+        );
+
+        let ear_cut = db(run(false, true, 3_400.0), run(false, false, 3_400.0));
+        let ear_cut_with_auto = db(run(true, true, 3_400.0), run(true, false, 3_400.0));
+        assert!(
+            (ear_cut - ear_cut_with_auto).abs() < 0.05,
+            "AutoEQ altered the ear stage's cut: {ear_cut:.2} vs {ear_cut_with_auto:.2} dB"
+        );
+        assert!(
+            (-7.5..=-4.0).contains(&ear_cut_with_auto),
+            "ear stage did not cut its own band: {ear_cut_with_auto:.2} dB"
+        );
+    }
+
+    #[test]
     fn declicked_change_has_no_waveform_step() {
         let mut processor = Processor::new(48_000.0);
         let before = ProcessingParams {
@@ -633,5 +796,77 @@ mod tests {
         assert!(out.iter().all(|sample| sample.is_finite()));
         assert_eq!(processor.params.eq_db, second.eq_db);
         assert_eq!(processor.transition, Transition::Idle);
+    }
+
+    fn protection_params(enabled: bool, intensity: f32) -> ProcessingParams {
+        ProcessingParams {
+            loud_sound_reduction: LoudSoundReductionParams { enabled, intensity },
+            limiter: LimiterParams {
+                enabled: false,
+                ..Default::default()
+            },
+            volume: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn rms_of(samples: &[f32]) -> f64 {
+        let tail = &samples[samples.len() / 2..];
+        (tail.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / tail.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn loud_sound_reduction_pulls_down_loud_content() {
+        let mut off = Processor::new(48_000.0);
+        off.set_params(&protection_params(false, 1.0));
+        let mut on = Processor::new(48_000.0);
+        on.set_params(&protection_params(true, 1.0));
+
+        let out_off = run_sine(&mut off, 200.0, 0.5, 2.0);
+        let out_on = run_sine(&mut on, 200.0, 0.5, 2.0);
+        let reduction_db = 20.0 * (rms_of(&out_on) / rms_of(&out_off)).log10();
+        assert!(
+            reduction_db < -8.0,
+            "loud content was only reduced by {reduction_db:.1} dB"
+        );
+        assert!(
+            on.analysis().protection_gr_db < -6.0,
+            "gain reduction meter did not follow the compression"
+        );
+    }
+
+    #[test]
+    fn loud_sound_reduction_leaves_quiet_content_alone() {
+        let mut off = Processor::new(48_000.0);
+        off.set_params(&protection_params(false, 1.0));
+        let mut on = Processor::new(48_000.0);
+        on.set_params(&protection_params(true, 1.0));
+
+        let out_off = run_sine(&mut off, 1_000.0, 0.002, 2.0);
+        let out_on = run_sine(&mut on, 1_000.0, 0.002, 2.0);
+        let delta_db = 20.0 * (rms_of(&out_on) / rms_of(&out_off)).log10();
+        assert!(
+            delta_db.abs() < 0.5,
+            "quiet content changed by {delta_db:.2} dB"
+        );
+    }
+
+    #[test]
+    fn loud_sound_reduction_is_spectrally_flat() {
+        let reduction = |freq: f32| {
+            let mut off = Processor::new(48_000.0);
+            off.set_params(&protection_params(false, 1.0));
+            let mut on = Processor::new(48_000.0);
+            on.set_params(&protection_params(true, 1.0));
+            let off_rms = rms_of(&run_sine(&mut off, freq, 0.35, 2.0));
+            let on_rms = rms_of(&run_sine(&mut on, freq, 0.35, 2.0));
+            20.0 * (on_rms / off_rms).log10()
+        };
+        let low = reduction(200.0);
+        let high = reduction(4_000.0);
+        assert!(
+            (low - high).abs() < 1.0,
+            "protection tilted the response: 200 Hz {low:.1} dB vs 4 kHz {high:.1} dB"
+        );
     }
 }

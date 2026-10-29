@@ -17,7 +17,7 @@ later. It builds on the components below.
 
 | Component | License | Notes |
 | --- | --- | --- |
-| [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small) | Apache-2.0 | int8 ONNX model fetched on first use of the Ear page and verified against a pinned SHA-256. |
+| [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small) | Apache-2.0 | fp32 ONNX model fetched on first use of the Ear page and verified against a pinned SHA-256. |
 | [VB-CABLE Virtual Audio Cable](https://vb-audio.com/Cable/) | Donationware (VB-Audio) | Windows installer fetched from the official vendor URL and run only after the user asks; not bundled. |
 | [BlackHole 2ch](https://existential.audio/blackhole/) | GPL-3.0 | macOS installer fetched from the official vendor URL and checksum-verified; not bundled. |
 

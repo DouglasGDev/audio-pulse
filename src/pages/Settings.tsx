@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { Segmented, Slider, Toggle } from "../components/Controls";
 import { Icon } from "../components/Icons";
 import { Panel } from "../components/Panel";
@@ -27,9 +29,12 @@ export function Settings() {
   const refreshDevices = useAppStore((state) => state.refreshDevices);
   const installVirtualCable = useAppStore((state) => state.installVirtualCable);
   const setDeviceProfile = useAppStore((state) => state.setDeviceProfile);
+  const restoreSoundDefaults = useAppStore((state) => state.restoreSoundDefaults);
   const startEngine = useAppStore((state) => state.startEngine);
   const engineBusy = useAppStore((state) => state.engineBusy);
   const cableBusy = useAppStore((state) => state.cableBusy);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const language = useLanguage();
   const t = (key: MessageKey, vars?: Record<string, string | number>) =>
     translate(language, key, vars);
@@ -43,6 +48,16 @@ export function Settings() {
   const chooseWav = async () => {
     const path = await pickWavFile();
     if (path) await startEngine("wav", path);
+  };
+
+  const restoreDefaults = async () => {
+    setResetting(true);
+    try {
+      await restoreSoundDefaults();
+      setConfirmingReset(false);
+    } finally {
+      setResetting(false);
+    }
   };
 
   return (
@@ -304,6 +319,41 @@ export function Settings() {
                 />
               </div>
             ))}
+          </div>
+        </Panel>
+
+        <Panel className="span-2" title={t("settings.soundDefaults")}>
+          <div className="inline-actions">
+            {confirmingReset ? (
+              <>
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={resetting}
+                  onClick={() => void restoreDefaults()}
+                >
+                  <Icon name="refresh" size={14} />
+                  {t("common.confirm")}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={resetting}
+                  onClick={() => setConfirmingReset(false)}
+                >
+                  {t("common.cancel")}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => setConfirmingReset(true)}
+              >
+                <Icon name="refresh" size={14} />
+                {t("settings.restoreSound")}
+              </button>
+            )}
           </div>
         </Panel>
 

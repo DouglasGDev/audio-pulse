@@ -45,10 +45,12 @@ export function defaultParams(): ProcessingParams {
     },
     limiter: { enabled: true, ceilingDb: -0.3, releaseMs: 80 },
     loudness: { enabled: false, intensity: 0.6 },
+    loudSoundReduction: { enabled: false, intensity: 0.6 },
     spatial: { mode: "off", width: 1, room: 0.35 },
     crossfeed: { enabled: false, amount: 0.3, delayMs: 0.3 },
     autoEq: { enabled: true, preampDb: 0, filters: [] },
     adaptiveEq: { enabled: false, intensity: 0.55 },
+    earProfile: { enabled: false, preampDb: 0, filters: [] },
     volume: 1,
     bypass: false,
   };
@@ -249,6 +251,25 @@ export const MOCK_PRESETS: Preset[] = [
       p.limiter.ceilingDb = -1;
     },
   ),
+  modePreset(
+    "protection",
+    "Proteção",
+    "protection",
+    "Graves contidos, dinâmica controlada e teto de pico baixo para sessões longas.",
+    (p) => {
+      p.preampDb = -2;
+      p.compressor = {
+        enabled: true,
+        thresholdDb: -24,
+        ratio: 3,
+        attackMs: 5,
+        releaseMs: 250,
+        kneeDb: 6,
+        makeupDb: 0,
+      };
+      p.limiter.ceilingDb = -3;
+    },
+  ),
   headphonePreset("hp-sony-wh1000xm4", "Sony", "WH-1000XM4", -6, [
     ls(105, -2.5, 0.7),
     pk(220, 1.5, 1),
@@ -402,6 +423,8 @@ function shapingEqual(a: ProcessingParams, b: ProcessingParams): boolean {
   right.volume = 0;
   left.bypass = false;
   right.bypass = false;
+  left.earProfile = { enabled: false, preampDb: 0, filters: [] };
+  right.earProfile = { enabled: false, preampDb: 0, filters: [] };
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
@@ -491,13 +514,28 @@ export const mockBackend = {
     const params = clone(preset.params);
     params.volume = state.params.volume;
     params.bypass = state.params.bypass;
+    params.earProfile = clone(state.params.earProfile);
     state.params = params;
     state.activePresetId = id;
     emitState();
     return currentView();
   },
 
+  restoreSoundDefaults(): AppView {
+    const preset = state.presets.find((p) => p.id === "music");
+    const params = clone(preset ? preset.params : defaultParams());
+    params.volume = state.params.volume;
+    params.bypass = false;
+    params.earProfile = { enabled: false, preampDb: 0, filters: [] };
+    state.params = params;
+    state.activePresetId = "music";
+    emitState();
+    return currentView();
+  },
+
   savePreset(name: string): AppView {
+    const params = clone(state.params);
+    params.earProfile = { enabled: false, preampDb: 0, filters: [] };
     const preset: Preset = {
       id: `custom-${Date.now()}`,
       name: name.trim() || "Preset",
@@ -506,7 +544,7 @@ export const mockBackend = {
       brand: null,
       model: null,
       builtIn: false,
-      params: clone(state.params),
+      params,
     };
     state.presets.push(preset);
     state.activePresetId = preset.id;
@@ -610,7 +648,7 @@ export const mockBackend = {
     return {
       installed: false,
       bytes: 0,
-      expectedBytes: 27_258_801,
+      expectedBytes: 99_060_839,
       name: "Depth Anything V2 Small",
       license: "Apache-2.0",
     };
@@ -684,6 +722,11 @@ function publishTelemetry() {
     telemetry.peakR = 0.36 * energy;
     telemetry.compressorGrDb =
       state.params.compressor.enabled ? 1.2 + Math.sin(time * 0.8) * 1.1 : 0;
+    const protection = state.params.loudSoundReduction;
+    telemetry.protectionGrDb =
+      protection.enabled && protection.intensity > 0.01
+        ? (0.8 + Math.abs(Math.sin(time * 1.1)) * 2.4) * protection.intensity
+        : 0;
     telemetry.limiterGrDb = 0.4 + Math.sin(time * 1.4) * 0.35;
     if (state.params.adaptiveEq.enabled) {
       const intensity = state.params.adaptiveEq.intensity;

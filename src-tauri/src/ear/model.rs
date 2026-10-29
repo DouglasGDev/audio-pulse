@@ -1,4 +1,4 @@
-//! Cached download of the local depth model (Depth Anything V2 Small, int8).
+//! Cached download of the local depth model (Depth Anything V2 Small, fp32).
 
 use crate::config::config_path;
 use parking_lot::Mutex;
@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-pub const MODEL_FILE: &str = "depth-anything-v2-small-int8.onnx";
+pub const MODEL_FILE: &str = "depth-anything-v2-small.onnx";
+pub const LEGACY_MODEL_FILE: &str = "depth-anything-v2-small-int8.onnx";
 pub const MODEL_URL: &str =
-    "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_int8.onnx";
-pub const MODEL_SHA256: &str = "01aa7a23de3f4a0ee1a2bb9997e6918104c85a9f95dea46d27b9b3fb0c6b9001";
-pub const MODEL_BYTES: u64 = 27_258_801;
+    "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx";
+pub const MODEL_SHA256: &str = "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c";
+pub const MODEL_BYTES: u64 = 99_060_839;
 pub const MODEL_NAME: &str = "Depth Anything V2 Small";
 pub const MODEL_LICENSE: &str = "Apache-2.0";
 
@@ -141,6 +142,7 @@ pub fn download_with(mut progress: impl FnMut(u64, u64)) -> Result<ModelStatus, 
     }
     fs::rename(&part, &dest)
         .map_err(|err| format!("Não foi possível concluir o download: {err}"))?;
+    let _ = fs::remove_file(dir.join(LEGACY_MODEL_FILE));
     progress(received, total);
     log::info!("depth model installed at {}", dest.display());
     Ok(status())

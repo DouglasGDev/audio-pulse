@@ -8,6 +8,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Dynamics } from "./pages/Dynamics";
 import { EarProfile } from "./pages/EarProfile";
 import { Equalizer } from "./pages/Equalizer";
+import { Hearing } from "./pages/Hearing";
 import { Presets } from "./pages/Presets";
 import { Settings } from "./pages/Settings";
 import { Spatial } from "./pages/Spatial";
@@ -19,6 +20,7 @@ const PAGES: Record<Page, ComponentType> = {
   equalizer: Equalizer,
   spatial: Spatial,
   dynamics: Dynamics,
+  hearing: Hearing,
   presets: Presets,
   ear: EarProfile,
   settings: Settings,

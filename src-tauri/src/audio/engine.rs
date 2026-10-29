@@ -275,6 +275,7 @@ impl EngineThread {
         telemetry.peak_r = 0.0;
         telemetry.compressor_gr_db = 0.0;
         telemetry.limiter_gr_db = 0.0;
+        telemetry.protection_gr_db = 0.0;
         telemetry.adaptive_gains_db = [0.0; ADAPTIVE_EQ_BANDS];
         telemetry.cpu_percent = 0.0;
         telemetry.latency_ms = 0.0;
@@ -791,6 +792,7 @@ fn publish_idle(shared: &EngineShared, rate: u32) {
     telemetry.peak_r = 0.0;
     telemetry.compressor_gr_db = 0.0;
     telemetry.limiter_gr_db = 0.0;
+    telemetry.protection_gr_db = 0.0;
     telemetry.adaptive_gains_db = [0.0; ADAPTIVE_EQ_BANDS];
     telemetry.cpu_percent = shared.cpu_permille.load(Ordering::Relaxed) as f32 / 10.0;
     telemetry.latency_ms = shared.latency_us.load(Ordering::Relaxed) as f32 / 1_000.0;
@@ -822,6 +824,7 @@ fn publish(
     telemetry.peak_r = analysis.peak_r;
     telemetry.compressor_gr_db = analysis.compressor_gr_db;
     telemetry.limiter_gr_db = analysis.limiter_gr_db;
+    telemetry.protection_gr_db = analysis.protection_gr_db;
     telemetry.adaptive_gains_db = analysis.adaptive_gains_db;
     telemetry.cpu_percent = (*cpu * 100.0).min(1000.0);
     telemetry.latency_ms = shared.latency_us.load(Ordering::Relaxed) as f32 / 1_000.0;

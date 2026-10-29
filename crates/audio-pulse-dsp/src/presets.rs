@@ -23,6 +23,7 @@ pub enum PresetCategory {
     Flat,
     Bass,
     Night,
+    Protection,
     Headphone,
     Custom,
 }
@@ -266,16 +267,16 @@ fn mode_presets() -> Vec<Preset> {
             PresetCategory::Bass,
             "Subwoofer virtual e graves amplos para fones de qualquer tamanho.",
             |p| {
-                p.eq_db = [4.0, 3.5, 2.0, 0.0, -1.0, 0.0, 0.5, 0.5, 0.0, 0.0];
+                p.eq_db = [1.5, 1.5, 1.0, 0.0, -1.0, 0.0, 0.5, 0.5, 0.0, 0.0];
                 p.bass = BassParams {
                     enabled: true,
-                    intensity: 0.85,
+                    intensity: 0.4,
                     cutoff_hz: 70.0,
-                    harmonics: 0.35,
+                    harmonics: 0.2,
                 };
                 p.loudness = LoudnessParams {
                     enabled: true,
-                    intensity: 0.4,
+                    intensity: 0.2,
                 };
             },
         ),
@@ -300,6 +301,26 @@ fn mode_presets() -> Vec<Preset> {
                     intensity: 0.9,
                 };
                 p.limiter.ceiling_db = -1.0;
+            },
+        ),
+        mode(
+            "protection",
+            "Proteção",
+            PresetCategory::Protection,
+            "Graves contidos, dinâmica controlada, redução de sons altos e teto de pico baixo para sessões longas.",
+            |p| {
+                p.preamp_db = -2.0;
+                p.compressor = CompressorParams {
+                    enabled: true,
+                    threshold_db: -24.0,
+                    ratio: 3.0,
+                    attack_ms: 5.0,
+                    release_ms: 250.0,
+                    knee_db: 6.0,
+                    makeup_db: 0.0,
+                };
+                p.loud_sound_reduction.enabled = true;
+                p.limiter.ceiling_db = -3.0;
             },
         ),
     ]
@@ -477,7 +498,42 @@ pub fn find_builtin(id: &str) -> Option<Preset> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::Processor;
     use std::collections::HashSet;
+    use std::f64::consts::PI;
+
+    const SR: f32 = 48_000.0;
+
+    fn gain_db(params: &ProcessingParams, freq: f32) -> f64 {
+        let mut chain = Processor::new(SR);
+        chain.set_params(params);
+        let amp = 0.1f64;
+        let frames = SR as usize;
+        let skip = frames / 2;
+        let mut buf = [0.0f32; 1024];
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+        let mut done = 0usize;
+        while done < frames {
+            let n = (frames - done).min(512);
+            for i in 0..n {
+                let t = (done + i) as f64 / SR as f64;
+                let v = (amp * (2.0 * PI * freq as f64 * t).sin()) as f32;
+                buf[i * 2] = v;
+                buf[i * 2 + 1] = v;
+            }
+            chain.process_interleaved(&mut buf[..n * 2]);
+            if done >= skip {
+                for frame in buf[..n * 2].chunks_exact(2) {
+                    sum += frame[0] as f64 * frame[0] as f64;
+                    count += 1;
+                }
+            }
+            done += n;
+        }
+        let rms = (sum / count as f64).sqrt();
+        20.0 * (rms / (amp / 2f64.sqrt())).log10()
+    }
 
     #[test]
     fn ids_are_unique_and_filters_within_budget() {
@@ -493,8 +549,48 @@ mod tests {
 
     #[test]
     fn modes_exist() {
-        for id in ["music", "cinema", "gaming", "podcast", "vocal", "flat"] {
+        for id in ["music", "cinema", "gaming", "podcast", "vocal", "flat", "protection"] {
             assert!(find_builtin(id).is_some(), "{id}");
+        }
+    }
+
+    // Guards against the bass preset stacking EQ, shelf and loudness into a
+    // low-end tilt that is physically uncomfortable on closed-back headphones.
+    #[test]
+    fn bass_preset_keeps_low_frequency_gain_bounded() {
+        let mut params = find_builtin("bass").unwrap().params;
+        params.volume = 0.19;
+        params.bypass = false;
+        let reference = gain_db(&params, 1_000.0);
+        for freq in [20.0, 31.0, 40.0, 62.0, 125.0] {
+            let tilt = gain_db(&params, freq) - reference;
+            assert!(
+                tilt < 15.0,
+                "bass preset boosts {freq} Hz by {tilt:+.1} dB over 1 kHz"
+            );
+        }
+    }
+
+    #[test]
+    fn protection_preset_is_flat_and_peak_limited() {
+        let mut params = find_builtin("protection").unwrap().params;
+        params.volume = 0.19;
+        params.bypass = false;
+        assert!(!params.bass.enabled);
+        assert!(!params.loudness.enabled);
+        assert!(params.compressor.enabled);
+        assert!(params.loud_sound_reduction.enabled);
+        assert!(params.preamp_db <= -2.0);
+        assert!(params.limiter.enabled);
+        assert!(params.limiter.ceiling_db <= -3.0);
+
+        let reference = gain_db(&params, 1_000.0);
+        for freq in [31.0, 62.0, 125.0] {
+            let tilt = gain_db(&params, freq) - reference;
+            assert!(
+                tilt.abs() < 1.0,
+                "protection preset tilts {freq} Hz by {tilt:+.1} dB"
+            );
         }
     }
 }

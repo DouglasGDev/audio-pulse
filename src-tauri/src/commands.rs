@@ -102,6 +102,13 @@ pub fn delete_preset(app: AppHandle, state: State<'_, AppState>, id: String) -> 
 }
 
 #[tauri::command]
+pub fn restore_sound_defaults(app: AppHandle, state: State<'_, AppState>) -> Result<AppView, String> {
+    state.restore_sound_defaults()?;
+    emit_view(&app, &state);
+    Ok(state.view())
+}
+
+#[tauri::command]
 pub fn export_preset(
     state: State<'_, AppState>,
     id: String,

@@ -24,6 +24,7 @@ export type IconName =
   | "refresh"
   | "sun"
   | "moon"
+  | "shield"
   | "keyboard"
   | "cable"
   | "sparkle"
@@ -148,6 +149,12 @@ const paths: Record<Exclude<IconName, "logo">, ReactElement> = {
     </>
   ),
   moon: <path d="M20 14.2A8.5 8.5 0 0 1 9.8 4 8.5 8.5 0 1 0 20 14.2Z" />,
+  shield: (
+    <>
+      <path d="M12 3.2 19 6v5.2c0 4.3-2.8 7.6-7 9.6-4.2-2-7-5.3-7-9.6V6l7-2.8Z" />
+      <path d="m8.8 12 2.2 2.2 4.2-4.4" />
+    </>
+  ),
   keyboard: (
     <>
       <rect x="2.5" y="6" width="19" height="12" rx="2.5" />

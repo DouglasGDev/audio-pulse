@@ -11,6 +11,7 @@ const NAV: { page: Page; icon: IconName }[] = [
   { page: "equalizer", icon: "equalizer" },
   { page: "spatial", icon: "spatial" },
   { page: "dynamics", icon: "dynamics" },
+  { page: "hearing", icon: "shield" },
   { page: "presets", icon: "presets" },
   { page: "ear", icon: "ear" },
   { page: "settings", icon: "settings" },

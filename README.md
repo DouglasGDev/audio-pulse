@@ -6,7 +6,7 @@
 
 <p align="center">
   Um motor DSP de baixa latência para todo som do computador: EQ de 10 bandas, AutoEQ paramétrico,<br/>
-  síntese de graves, loudness ISO 226, HRTF dinâmico e perfil pela foto da orelha com IA local.
+  síntese de graves, loudness ISO 226, redução de sons altos, HRTF dinâmico e perfil pela foto da orelha com IA local.
 </p>
 
 <p align="center">
@@ -44,11 +44,12 @@ sem conta, sem telemetria, sem processamento na nuvem.
 | Som | Personalização | Integração com o sistema |
 | --- | --- | --- |
 | **EQ gráfico de 10 bandas** — 31 Hz a 16 kHz, ±12 dB, com curva de resposta ao vivo e nós arrastáveis | **Perfil da orelha** — modelo de profundidade local estima a concha e propõe correção de 2–8 kHz | **Rota para todo o sistema** — cabo virtual e troca automática da saída padrão no Windows |
-| **AutoEQ paramétrico** — até 16 filtros PK/LS/HS, importação de `ParametricEQ.txt`, preamp | **Presets** — 8 modos de escuta e 12 perfis de fone de referência | **Volume sincronizado** — o slider do app e o volume do Windows são o mesmo controle |
+| **AutoEQ paramétrico** — até 16 filtros PK/LS/HS, importação de `ParametricEQ.txt`, preamp | **Presets** — 9 modos de escuta e 12 perfis de fone de referência | **Volume sincronizado** — o slider do app e o volume do Windows são o mesmo controle |
 | **EQ adaptativo** — 5 bandas de oitava a cada 20 ms, ±3 dB, headroom preditivo; determinístico, não é caixa-preta | **Presets personalizados** — criar, exportar e importar perfis JSON | **Perfis por dispositivo** — aplica um preset quando uma saída específica inicia |
-| **Bass Boost** — low shelf e síntese de harmônicos pelo fenômeno do fundamental ausente | **Segurança do perfil** — AutoEQ anterior salvo, restauração em um clique | **Bandeja, atalhos, autostart** — controle sem abrir a janela |
+| **Bass Boost** — low shelf e síntese de harmônicos pelo fenômeno do fundamental ausente | **Estágio do perfil da orelha** — soma-se ao preset e ao AutoEQ; **Restaurar padrões** em um clique | **Bandeja, atalhos, autostart** — controle sem abrir a janela |
 | **Dinâmica** — compressor e limiter com look-ahead de 5 ms | | **Bateria sem fio** — relatório HID de receptores USB no Windows |
 | **Loudness** — compensação ISO 226 que acompanha o volume master | | **Medidores reais** — espectro de 56 bandas, níveis L/R, redução de ganho, CPU, latência e xruns |
+| **Redução de sons altos** — compressor lento e estéreo depois do volume; intensidade ajustável e atuação em tempo real | | |
 | **Áudio espacial** — binaural, HRTF dinâmico e upmix 7.1; crossfeed para fones | | **Interface** — dark/light, português e inglês, responsiva |
 
 ## Capturas
@@ -75,9 +76,15 @@ Clique em qualquer captura para abrir em resolução máxima.
 ```text
 Qualquer aplicativo ──► cabo virtual ──► Audio Pulse ──► seu fone
                                             │
-preamp → AutoEQ → EQ 10 → tone → graves → espacial → crossfeed
-       → EQ adaptativo → compressor → volume → loudness → limiter
+subsônico → preamp → AutoEQ → EQ 10 → tone → graves → espacial
+          → crossfeed → EQ adaptativo → compressor → volume → loudness
+          → redução de sons altos → limiter
 ```
+
+O primeiro estágio é um high-pass Butterworth de 4ª ordem em 20 Hz: remove DC e
+infrassom que deslocam o diafragma sem serem audíveis — a sensação que isso
+causa é justamente pressão no ouvido. Fica abaixo dos 31 Hz do EQ, então não
+altera o grave que você ouve.
 
 - **Um processo, uma thread de áudio.** O CPAL é dono dos streams de entrada e
   saída durante toda a sessão. Buffers, filtros e espectros são pré-alocados;
@@ -90,8 +97,8 @@ preamp → AutoEQ → EQ 10 → tone → graves → espacial → crossfeed
   e conta xruns em vez de deixar a fila crescer.
 - **Crate de DSP em Rust.** [`crates/audio-pulse-dsp`](crates/audio-pulse-dsp) é
   DSP puro, sem dependência de dispositivo: biquads RBJ, síntese de graves,
-  renderizador espacial, EQ adaptativo, compressor, limiter, loudness ISO 226 e
-  análise de espectro.
+  renderizador espacial, EQ adaptativo, compressor, limiter, loudness ISO 226,
+  redução de sons altos e análise de espectro.
 
 Feito com Tauri 2, Rust, React 19, TypeScript, Vite 8, CPAL, `ringbuf`,
 `arc-swap` e ONNX Runtime (`ort`, vinculado estaticamente).
@@ -100,17 +107,20 @@ Feito com Tauri 2, Rust, React 19, TypeScript, Vite 8, CPAL, `ringbuf`,
 
 A página **Orelha** guia um recorte de 512×512 do pavilhão e roda o
 [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small)
-(ONNX int8, ~26 MB) na CPU local. Uma máscara de pele e uma bacia de
-profundidade adaptativa localizam a concha; quatro métricas de geometria geram
-uma correção paramétrica, e três filtros peaking em 2–8 kHz são propostos como
-perfil de AutoEQ.
+(ONNX fp32, ~95 MB) na CPU local. Uma busca adaptativa de zona sobre o mapa de
+profundidade localiza a concha; quatro métricas de geometria geram uma correção
+paramétrica, e três filtros peaking em 2–8 kHz são propostos como perfil.
 
 - A foto é decodificada, recortada e analisada **na sua máquina**; nunca é
   enviada e nenhuma chamada de rede acontece durante a análise.
 - O modelo é baixado automaticamente na primeira vez que a página abre, direto
   do Hugging Face, e verificado por SHA-256 antes de ser usado.
-- Aplicar o perfil é sempre explícito. O AutoEQ anterior é salvo antes e
-  **Restaurar AutoEQ anterior** devolve exatamente o estado anterior.
+- O perfil entra como **estágio próprio**, entre o AutoEQ e o equalizador
+  gráfico: ele se soma ao preset e ao AutoEQ em vez de substituí-los, e os
+  presets não carregam nem apagam o perfil.
+- Aplicar o perfil é sempre explícito, e **Remover perfil** o desliga sem tocar
+  no resto da cadeia. **Restaurar padrões** em Ajustes volta ao preset Música
+  com o perfil de orelha vazio, preservando o volume master do Windows.
 - Baixa confiança, recorte descentralizado, concha ausente, foto escura ou
   estourada bloqueiam a aplicação em vez de adivinhar.
 
@@ -168,7 +178,10 @@ por um cabo virtual:
    baixa o pacote oficial do VB-CABLE, confere a assinatura Authenticode, executa
    o instalador (um pedido de administrador) e seleciona `CABLE Output` como
    captura. Enquanto a rota está ativa, a saída padrão do Windows vai para
-   `CABLE Input` e é restaurada ao parar ou fechar.
+   `CABLE Input` e é restaurada ao parar ou fechar. Se você conectar um fone ou
+   trocar a saída padrão, a rota acompanha o novo dispositivo e retoma o cabo em
+   seguida; se o fone ou o cabo desaparecerem, ela reinicia sozinha e mostra um
+   aviso.
 2. **macOS** — instale o BlackHole 2ch pelo app, defina-o como saída do sistema,
    selecione-o como captura e o fone como saída.
 3. **Linux** — crie um sink nulo e use o monitor como captura:

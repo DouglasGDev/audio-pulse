@@ -1917,7 +1917,23 @@ ul {
   align-items: start;
 }
 
+/* ---------- Hearing ---------- */
+
+.hearing {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
 .compressor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 24px;
+  align-items: center;
+}
+
+.protection-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 24px;
@@ -2971,6 +2987,11 @@ ul {
     gap: 18px;
   }
 
+  .protection-layout {
+    grid-template-columns: minmax(0, 1fr) 270px;
+    gap: 18px;
+  }
+
   .hero-metrics {
     width: 290px;
   }
@@ -2998,12 +3019,14 @@ ul {
   }
 
   .settings-grid,
-  .dynamics {
+  .dynamics,
+  .hearing {
     grid-template-columns: 1fr;
   }
 
   .settings-grid .span-2,
-  .dynamics .span-2 {
+  .dynamics .span-2,
+  .hearing .span-2 {
     grid-column: auto;
   }
 
@@ -3116,6 +3139,10 @@ ul {
   }
 
   .compressor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .protection-layout {
     grid-template-columns: 1fr;
   }
 

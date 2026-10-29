@@ -43,6 +43,11 @@ export interface LoudnessParams {
   intensity: number;
 }
 
+export interface LoudSoundReductionParams {
+  enabled: boolean;
+  intensity: number;
+}
+
 export interface SpatialParams {
   mode: SpatialMode;
   width: number;
@@ -66,6 +71,12 @@ export interface AdaptiveEqParams {
   intensity: number;
 }
 
+export interface EarProfileParams {
+  enabled: boolean;
+  preampDb: number;
+  filters: AutoEqFilter[];
+}
+
 export interface ProcessingParams {
   preampDb: number;
   eqDb: number[];
@@ -74,10 +85,12 @@ export interface ProcessingParams {
   compressor: CompressorParams;
   limiter: LimiterParams;
   loudness: LoudnessParams;
+  loudSoundReduction: LoudSoundReductionParams;
   spatial: SpatialParams;
   crossfeed: CrossfeedParams;
   autoEq: AutoEqParams;
   adaptiveEq: AdaptiveEqParams;
+  earProfile: EarProfileParams;
   volume: number;
   bypass: boolean;
 }
@@ -96,6 +109,7 @@ export type PresetCategory =
   | "flat"
   | "bass"
   | "night"
+  | "protection"
   | "headphone"
   | "custom";
 
@@ -177,6 +191,7 @@ export interface Telemetry {
   peakR: number;
   compressorGrDb: number;
   limiterGrDb: number;
+  protectionGrDb: number;
   adaptiveGainsDb: number[];
   cpuPercent: number;
   latencyMs: number;
@@ -251,6 +266,7 @@ export const EMPTY_TELEMETRY: Telemetry = {
   peakL: 0,
   peakR: 0,
   compressorGrDb: 0,
+  protectionGrDb: 0,
   limiterGrDb: 0,
   adaptiveGainsDb: Array.from({ length: 5 }, () => 0),
   cpuPercent: 0,

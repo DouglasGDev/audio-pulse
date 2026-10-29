@@ -19,10 +19,10 @@ import { formatDb, formatHz, formatPercent } from "../lib/format";
 import { translate, type MessageKey } from "../lib/i18n";
 import type {
   AutoEqFilter,
-  AutoEqParams,
   EarAnalysis,
   EarModelProgress,
   EarModelStatus,
+  EarProfileParams,
 } from "../lib/types";
 import { useAppStore, useLanguage } from "../store/appStore";
 
@@ -48,10 +48,13 @@ function sameFilters(left: AutoEqFilter[], right: AutoEqFilter[]): boolean {
   });
 }
 
-function profileIsApplied(analysis: EarAnalysis, autoEq: AutoEqParams): boolean {
+function profileIsApplied(
+  analysis: EarAnalysis,
+  earProfile: EarProfileParams,
+): boolean {
   return (
-    sameFilters(analysis.filters, autoEq.filters) &&
-    Math.abs(analysis.preampDb - autoEq.preampDb) < 0.06
+    sameFilters(analysis.filters, earProfile.filters) &&
+    Math.abs(analysis.preampDb - earProfile.preampDb) < 0.06
   );
 }
 
@@ -62,10 +65,8 @@ function megabytes(bytes: number): string {
 export function EarProfile() {
   const view = useAppStore((state) => state.view);
   const earAnalysis = useAppStore((state) => state.earAnalysis);
-  const earBackup = useAppStore((state) => state.earBackup);
   const earPhoto = useAppStore((state) => state.earPhoto);
   const setEarAnalysis = useAppStore((state) => state.setEarAnalysis);
-  const setEarBackup = useAppStore((state) => state.setEarBackup);
   const setEarPhoto = useAppStore((state) => state.setEarPhoto);
   const patchParams = useAppStore((state) => state.patchParams);
   const toast = useAppStore((state) => state.toast);
@@ -101,10 +102,10 @@ export function EarProfile() {
     setError(translate(language, "ear.badFile"));
   }, [language]);
 
-  const autoEq = view?.params.autoEq;
+  const earProfile = view?.params.earProfile;
   const analysis = earAnalysis;
   const applied =
-    analysis && autoEq ? profileIsApplied(analysis, autoEq) : false;
+    analysis && earProfile ? profileIsApplied(analysis, earProfile) : false;
   const trustworthy =
     !!analysis &&
     analysis.confidence >= 0.25 &&
@@ -206,33 +207,20 @@ export function EarProfile() {
   }, [model]);
 
   const applyProfile = () => {
-    if (!analysis || !view) return;
-    if (!earBackup) setEarBackup(structuredClone(view.params.autoEq));
+    if (!analysis) return;
     patchParams((params) => {
-      params.autoEq.filters = analysis.filters.map((filter) => ({ ...filter }));
-      params.autoEq.preampDb = analysis.preampDb;
-      params.autoEq.enabled = true;
+      params.earProfile.filters = analysis.filters.map((filter) => ({ ...filter }));
+      params.earProfile.preampDb = analysis.preampDb;
+      params.earProfile.enabled = true;
     });
     toast(t("ear.toastApplied"), "success");
   };
 
   const removeProfile = () => {
     patchParams((params) => {
-      params.autoEq.enabled = false;
-      params.autoEq.preampDb = 0;
-      params.autoEq.filters = [];
+      params.earProfile = { enabled: false, preampDb: 0, filters: [] };
     });
     toast(t("ear.toastRemoved"), "info");
-  };
-
-  const restoreBackup = () => {
-    if (!earBackup) return;
-    const backup = structuredClone(earBackup);
-    patchParams((params) => {
-      params.autoEq = backup;
-    });
-    setEarBackup(null);
-    toast(t("ear.toastRestored"), "success");
   };
 
   if (!view) return <div className="page-loading">{t("common.loading")}</div>;
@@ -469,35 +457,29 @@ export function EarProfile() {
           </Panel>
 
           <Panel title={applied ? t("ear.applied") : t("ear.apply")}>
-            {analysis || earBackup ? (
+            {analysis ? (
               <div className="ear-apply">
-                {analysis && applied && autoEq ? (
+                {applied && earProfile ? (
                   <Toggle
-                    checked={autoEq.enabled}
+                    checked={earProfile.enabled}
                     onChange={(checked) =>
                       patchParams((params) => {
-                        params.autoEq.enabled = checked;
+                        params.earProfile.enabled = checked;
                       })
                     }
                     label={t("ear.enabled")}
-                    description={`${t("eq.filters", { count: autoEq.filters.length })} · ${formatDb(autoEq.preampDb)}`}
+                    description={`${t("eq.filters", { count: earProfile.filters.length })} · ${formatDb(earProfile.preampDb)}`}
                   />
-                ) : analysis ? (
-                  <p className="ear-note">
-                    {autoEq && autoEq.filters.length > 0
-                      ? t("ear.replaces", { count: autoEq.filters.length })
-                      : t("ear.replacesNone")}
-                  </p>
                 ) : (
-                  <p className="ear-note">{t("ear.previousSaved")}</p>
+                  <p className="ear-note">{t("ear.composes")}</p>
                 )}
 
-                {analysis && !trustworthy && (
+                {!trustworthy && (
                   <p className="ear-note is-warn">{t("ear.lowConfidence")}</p>
                 )}
 
                 <div className="ear-apply-actions">
-                  {analysis && !applied && (
+                  {!applied && (
                     <button
                       type="button"
                       className="btn primary"
@@ -507,22 +489,13 @@ export function EarProfile() {
                       {t("ear.apply")}
                     </button>
                   )}
-                  {analysis && applied && (
+                  {applied && (
                     <button
                       type="button"
                       className="btn ghost"
                       onClick={removeProfile}
                     >
                       {t("ear.remove")}
-                    </button>
-                  )}
-                  {earBackup && (
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      onClick={restoreBackup}
-                    >
-                      {t("ear.restore")}
                     </button>
                   )}
                 </div>

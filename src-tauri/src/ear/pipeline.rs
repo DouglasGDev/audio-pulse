@@ -143,11 +143,11 @@ fn round_to(value: f32, step: f32) -> f32 {
 /// It is a heuristic, not a measured transfer function.
 pub fn map_filters(geometry: &geometry::Geometry) -> (Vec<AutoEqFilter>, f32, f32) {
     let depth = geometry.concha_depth.clamp(0.0, 1.0);
-    let size = ((geometry.concha_size - 0.02) / 0.12).clamp(0.0, 1.0);
+    let size = ((geometry.concha_size - 0.15) / 0.35).clamp(0.0, 1.0);
     let rim = geometry.helix_prominence.clamp(0.0, 1.0);
 
-    let f1 = (4650.0 - 850.0 * size - 450.0 * depth).clamp(3_100.0, 4_700.0);
-    let g1 = (1.1 - 3.4 * depth - 1.1 * size).clamp(-3.5, 1.5);
+    let f1 = (4650.0 - 1_150.0 * depth - 900.0 * size).clamp(3_100.0, 4_700.0);
+    let g1 = (0.9 - 4.2 * depth - 1.2 * size).clamp(-3.5, 1.5);
     let f2 = (f1 * 1.85).clamp(5_200.0, 8_500.0);
     let g2 = (g1 * 0.45).clamp(-1.8, 1.0);
     let g3 = ((rim - 0.45) * 2.4).clamp(-1.0, 1.5);
@@ -224,6 +224,8 @@ mod tests {
             basin: vec![false; CROP_SIZE * CROP_SIZE],
             basin_center_x: 256.0,
             basin_center_y: 320.0,
+            zone_center_x: 256.0,
+            zone_center_y: 280.0,
             concha_size: size,
             concha_depth: depth,
             helix_prominence: rim,
@@ -236,7 +238,7 @@ mod tests {
 
     #[test]
     fn deep_concha_cuts_the_lower_midrange() {
-        let (filters, preamp, resonance) = map_filters(&geom(1.0, 0.16, 0.5));
+        let (filters, preamp, resonance) = map_filters(&geom(1.0, 0.35, 0.5));
         assert!(filters[0].gain_db < -2.0, "gain {}", filters[0].gain_db);
         assert!((3_000.0..=3_500.0).contains(&resonance), "f1 {resonance}");
         assert!(preamp <= 0.0);
@@ -244,7 +246,7 @@ mod tests {
 
     #[test]
     fn shallow_concha_lifts_gently() {
-        let (filters, preamp, resonance) = map_filters(&geom(0.05, 0.02, 0.5));
+        let (filters, preamp, resonance) = map_filters(&geom(0.05, 0.15, 0.5));
         assert!(filters[0].gain_db > 0.5, "gain {}", filters[0].gain_db);
         assert!(resonance > 4_500.0, "f1 {resonance}");
         assert!((preamp + filters[0].gain_db).abs() < 0.11);
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn filters_stay_inside_the_ear_band() {
         for depth in [0.0, 0.5, 1.0] {
-            for size in [0.0, 0.07, 0.2] {
+            for size in [0.15, 0.35, 0.60] {
                 for rim in [0.0, 0.5, 1.0] {
                     let (filters, preamp, _) = map_filters(&geom(depth, size, rim));
                     assert_eq!(filters.len(), 3);

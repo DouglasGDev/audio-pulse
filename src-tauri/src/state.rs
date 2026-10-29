@@ -11,9 +11,16 @@ use crate::models::{AppView, BatteryInfo, DeviceList, EngineInfo, Settings};
 use crate::tray;
 use parking_lot::{Mutex, RwLock};
 use audio_pulse_dsp::presets::{builtin_presets, find_builtin};
-use audio_pulse_dsp::{PresetCategory, ProcessingParams, SpatialMode};
+use audio_pulse_dsp::{EarProfileParams, PresetCategory, ProcessingParams, SpatialMode};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const ROUTE_OUTPUT_WARNING: &str =
+    "Nenhum fone disponível: conecte um fone para a rota continuar.";
+const ROUTE_INPUT_WARNING: &str =
+    "Cabo virtual não encontrado: instale ou reative o cabo em Ajustes → Áudio.";
+const ROUTE_RECOVERY_INTERVAL: Duration = Duration::from_millis(1800);
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Default)]
@@ -33,6 +40,10 @@ pub struct AppState {
     warnings: Mutex<Vec<String>>,
     last_start: Mutex<Option<EngineStart>>,
     system_default: Mutex<Option<Engaged>>,
+    engage_lock: Mutex<()>,
+    route_op: Mutex<()>,
+    auto_route_pending: AtomicBool,
+    last_recovery: Mutex<Option<Instant>>,
     volume_sync: Mutex<VolumeSync>,
     battery: RwLock<Option<BatteryInfo>>,
     tray_signature: Mutex<String>,
@@ -47,6 +58,10 @@ impl AppState {
             warnings: Mutex::new(Vec::new()),
             last_start: Mutex::new(None),
             system_default: Mutex::new(None),
+            engage_lock: Mutex::new(()),
+            route_op: Mutex::new(()),
+            auto_route_pending: AtomicBool::new(false),
+            last_recovery: Mutex::new(None),
             volume_sync: Mutex::new(VolumeSync::default()),
             battery: RwLock::new(None),
             tray_signature: Mutex::new(String::new()),
@@ -224,6 +239,20 @@ impl AppState {
         let Ok(endpoint) = system_volume::read_default() else {
             return;
         };
+        let route_active = matches!(*self.last_start.lock(), Some(EngineStart::Route { .. }));
+        if route_active {
+            let cable = system_default::pick_cable_output(&self.devices.read().clone());
+            let on_cable = cable
+                .as_deref()
+                .is_some_and(|cable| endpoint.name.eq_ignore_ascii_case(cable));
+            if !on_cable {
+                // While routing, the master lives in the DSP. If Windows moved
+                // the default (headset plugged in), do not mirror or raise the
+                // new endpoint; the route supervisor takes the cable back.
+                self.engine.set_hardware_volume(false);
+                return;
+            }
+        }
         let master = self.params().volume;
         let mut sync = self.volume_sync.lock();
         if sync.retry_at.is_some_and(|at| now >= at) {
@@ -304,8 +333,8 @@ impl AppState {
         true
     }
 
-    /// The engine output must not attenuate on top of the Windows master:
-    /// unity while the cable carries the master, otherwise the master itself.
+    /// While routing the DSP owns the master and the physical output stays at
+    /// unity; otherwise the Windows endpoint is the master.
     fn pin_output_level(&self) {
         if !self.volume_sync.lock().enabled {
             return;
@@ -317,30 +346,28 @@ impl AppState {
         let Some(output) = info.output_device.as_deref() else {
             return;
         };
-        if devices::is_virtual_name(output) {
+        if info.mode == "route" {
+            // Keep the DSP gain even if Windows briefly moved the default
+            // away, so reclaiming the cable never produces a level jump.
             self.engine.set_hardware_volume(false);
+            if !devices::is_virtual_name(output) {
+                if let Err(err) = system_volume::normalize_endpoint(output, 1.0) {
+                    log::debug!("volume pin for {output}: {err}");
+                }
+            }
+            return;
+        }
+        self.engine.set_hardware_volume(true);
+        if devices::is_virtual_name(output) {
             return;
         }
         let Ok(default) = system_volume::read_default() else {
             return;
         };
-        let on_cable = info.mode == "route"
-            && !default.name.eq_ignore_ascii_case(output)
-            && system_default::pick_cable_output(&self.devices.read())
-                .is_some_and(|cable| default.name.eq_ignore_ascii_case(&cable));
-        // The cable's own scalar never reaches its capture side, so while it
-        // is the Windows master the DSP has to keep the gain. Anywhere else
-        // the output endpoint applies the master and the DSP must stay out.
-        self.engine.set_hardware_volume(!on_cable);
         if default.name.eq_ignore_ascii_case(output) {
             return;
         }
-        let target = if on_cable {
-            1.0
-        } else {
-            self.params().volume
-        };
-        if let Err(err) = system_volume::normalize_endpoint(output, target) {
+        if let Err(err) = system_volume::normalize_endpoint(output, self.params().volume) {
             log::debug!("volume pin for {output}: {err}");
         }
     }
@@ -419,6 +446,9 @@ impl AppState {
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let id = format!("custom-{stamp}");
+        let mut params = snapshot.params.sanitized();
+        // The ear profile belongs to the user, not to the preset.
+        params.ear_profile = EarProfileParams::default();
         let preset = audio_pulse_dsp::Preset {
             id: id.clone(),
             name: name.to_string(),
@@ -427,13 +457,25 @@ impl AppState {
             brand: None,
             model: None,
             built_in: false,
-            params: snapshot.params.sanitized(),
+            params,
         };
         self.store.mutate(|config| {
             config.custom_presets.push(preset);
             config.active_preset_id = Some(id.clone());
         });
         Ok(id)
+    }
+
+    /// Returns the sound to the app's factory state: the default preset and no
+    /// ear profile. The master volume belongs to Windows and is left alone.
+    pub fn restore_sound_defaults(&self) -> Result<ProcessingParams, String> {
+        let (preset_id, params) = factory_sound_params(self.params().volume)?;
+        self.store.mutate(|config| {
+            config.params = params.clone();
+            config.active_preset_id = Some(preset_id);
+        });
+        self.engine.set_params_declick(&params);
+        Ok(params)
     }
 
     pub fn delete_preset(&self, id: &str) -> Result<(), String> {
@@ -469,6 +511,18 @@ impl AppState {
         mode: &str,
         wav_path: Option<String>,
     ) -> Result<EngineInfo, String> {
+        let _op = self.route_op.lock();
+        self.start_engine_inner(mode, wav_path)
+    }
+
+    fn start_engine_inner(
+        &self,
+        mode: &str,
+        wav_path: Option<String>,
+    ) -> Result<EngineInfo, String> {
+        if mode != "route" {
+            self.auto_route_pending.store(false, Ordering::Relaxed);
+        }
         let snapshot = self.store.snapshot();
         let settings = snapshot.settings.clone();
 
@@ -536,6 +590,10 @@ impl AppState {
             return Err(err);
         }
         *self.last_start.lock() = Some(request);
+        self.auto_route_pending.store(false, Ordering::Relaxed);
+        if mode == "route" {
+            self.clear_route_warnings();
+        }
         if mode == "route" {
             self.engage_system_default();
         }
@@ -544,6 +602,9 @@ impl AppState {
     }
 
     pub fn stop_engine(&self) -> EngineInfo {
+        let _op = self.route_op.lock();
+        self.auto_route_pending.store(false, Ordering::Relaxed);
+        *self.last_start.lock() = None;
         self.engine.stop();
         self.release_system_default();
         self.engine.info()
@@ -553,16 +614,26 @@ impl AppState {
     /// running; without this, apps keep playing straight to the headphone and
     /// never reach the DSP chain.
     fn engage_system_default(&self) {
-        if self.system_default.lock().is_some() {
+        if !self.engine.info().running {
             return;
         }
+        let _engage = self.engage_lock.lock();
         let devices = self.devices.read().clone();
-        if !devices.virtual_cable_detected {
-            return;
-        }
         let Some(cable) = system_default::pick_cable_output(&devices) else {
             return;
         };
+        let cable_is_default = system_volume::read_default()
+            .map(|default| default.name.eq_ignore_ascii_case(&cable))
+            .unwrap_or(false);
+        let already = self.system_default.lock().is_some();
+        if already && cable_is_default {
+            return;
+        }
+        if already {
+            // Windows moved the default. Drop the stale restore target so the
+            // new engage() snapshots whatever the user is hearing right now.
+            let _ = self.system_default.lock().take();
+        }
         let sync = self.volume_sync.lock().enabled;
         let master = self.params().volume.clamp(0.0, 1.0);
         let cable_volume = if sync { master } else { 1.0 };
@@ -587,6 +658,7 @@ impl AppState {
     }
 
     pub fn release_system_default(&self) {
+        let _engage = self.engage_lock.lock();
         let engaged = self.system_default.lock().take();
         let Some(engaged) = engaged else {
             return;
@@ -610,6 +682,23 @@ impl AppState {
     /// A fresh install starts with a flat curve and no preset, which sounds
     /// exactly like no processing at all.
     pub fn ensure_default_preset(&self) {
+        let snapshot = self.store.snapshot();
+        let active_matches = match snapshot.active_preset_id.as_deref() {
+            Some(id) => find_builtin(id)
+                .or_else(|| {
+                    snapshot
+                        .custom_presets
+                        .iter()
+                        .find(|preset| preset.id == id)
+                        .cloned()
+                })
+                .map(|preset| same_shaping(&preset.params, &snapshot.params))
+                .unwrap_or(false),
+            None => false,
+        };
+        if snapshot.active_preset_id.is_some() && !active_matches {
+            self.store.mutate(|config| config.active_preset_id = None);
+        }
         let snapshot = self.store.snapshot();
         if snapshot.active_preset_id.is_some() {
             return;
@@ -636,31 +725,204 @@ impl AppState {
     /// already configured, start it with the window instead of waiting for a
     /// click that many users never make.
     pub fn auto_start_route(&self) {
-        if self.engine.info().running {
-            return;
-        }
-        let snapshot = self.store.snapshot();
-        let (Some(input), Some(output)) = (
-            snapshot.settings.input_device.as_deref(),
-            snapshot.settings.output_device.as_deref(),
-        ) else {
+        let _op = self.route_op.lock();
+        self.auto_route_pending.store(true, Ordering::Relaxed);
+        self.try_auto_route();
+    }
+
+    /// Keeps the route alive across headset plug/unplug and Windows default
+    /// changes. Called by a slow thread; route lifecycle operations are
+    /// serialized by `route_op`.
+    pub fn supervise_route(&self, app: &AppHandle) {
+        let Some(_op) = self.route_op.try_lock() else {
             return;
         };
-        if !devices::is_virtual_name(input) || devices::is_virtual_name(output) {
+        let before = self.engine.info();
+        let warnings_before = self.warnings.lock().len();
+
+        if self.auto_route_pending.load(Ordering::Relaxed) {
+            self.try_auto_route();
+        }
+        let route_requested = matches!(*self.last_start.lock(), Some(EngineStart::Route { .. }));
+        if !route_requested {
+            if self.system_default.lock().is_some() {
+                self.release_system_default();
+            }
+        } else {
+            let info = self.engine.info();
+            if info.running && info.mode == "route" {
+                self.follow_system_default(&info);
+            } else {
+                self.recover_route();
+            }
+        }
+
+        let after = self.engine.info();
+        let warnings_after = self.warnings.lock().len();
+        if before.running != after.running
+            || before.mode != after.mode
+            || before.output_device != after.output_device
+            || before.error != after.error
+            || warnings_before != warnings_after
+        {
+            emit_view(app, self);
+        }
+    }
+
+    fn try_auto_route(&self) {
+        if self.engine.info().running || !self.auto_route_pending.load(Ordering::Relaxed) {
             return;
         }
-        if !self.devices.read().virtual_cable_detected {
+        let devices = self.devices.read().clone();
+        if !devices.virtual_cable_detected {
             return;
         }
-        if let Err(err) = self.start_engine("route", None) {
-            self.push_warning(format!(
-                "Não foi possível iniciar a rota automaticamente: {err}"
-            ));
+        let settings = self.store.snapshot().settings;
+        let Some(output) = pick_route_output(&devices, settings.output_device.as_deref()) else {
+            return;
+        };
+        let Some(input) = pick_route_input(&devices, settings.input_device.as_deref()) else {
+            return;
+        };
+        self.apply_route_devices(&input, &output);
+        if let Err(err) = self.start_engine_inner("route", None) {
+            log::debug!("automatic route waiting: {err}");
         }
+    }
+
+    fn recover_route(&self) {
+        let now = Instant::now();
+        {
+            let mut last = self.last_recovery.lock();
+            if last.is_some_and(|at| now.duration_since(at) < ROUTE_RECOVERY_INTERVAL) {
+                return;
+            }
+            *last = Some(now);
+        }
+
+        let devices = self.refresh_devices();
+        let settings = self.store.snapshot().settings;
+        if system_default::pick_cable_output(&devices).is_none() {
+            self.release_system_default();
+            self.push_warning(ROUTE_INPUT_WARNING.into());
+            return;
+        }
+        let output = pick_route_output(&devices, settings.output_device.as_deref());
+        let input = pick_route_input(&devices, settings.input_device.as_deref());
+        let (Some(output), Some(input)) = (output, input) else {
+            self.release_system_default();
+            if devices.virtual_cable_detected {
+                self.push_warning(ROUTE_OUTPUT_WARNING.into());
+            } else {
+                self.push_warning(ROUTE_INPUT_WARNING.into());
+            }
+            return;
+        };
+        self.apply_route_devices(&input, &output);
+        match self.start_engine_inner("route", None) {
+            Ok(_) => {
+                log::info!("route recovered with output {output}");
+                self.clear_route_warnings();
+            }
+            Err(err) => {
+                self.release_system_default();
+                self.push_warning(format!("A rota foi interrompida: {err}"));
+            }
+        }
+    }
+
+    fn follow_system_default(&self, info: &EngineInfo) {
+        let devices = self.devices.read().clone();
+        let output_present = info.output_device.as_deref().is_some_and(|output| {
+            devices
+                .outputs
+                .iter()
+                .any(|device| device.name == output && !device.is_virtual)
+        });
+        let Some(cable) = system_default::pick_cable_output(&devices) else {
+            // The cable vanished; recover now instead of waiting for an error
+            // callback that may never fire.
+            self.engine.stop();
+            *self.last_recovery.lock() = None;
+            self.recover_route();
+            return;
+        };
+        if !output_present {
+            self.engine.stop();
+            *self.last_recovery.lock() = None;
+            self.recover_route();
+            return;
+        }
+        let Ok(default) = system_volume::read_default() else {
+            return;
+        };
+        if default.name.eq_ignore_ascii_case(&cable) {
+            return;
+        }
+        if !devices::is_virtual_name(&default.name)
+            && info.output_device.as_deref() != Some(default.name.as_str())
+            && self.adopt_output(&default.name)
+        {
+            return;
+        }
+        self.engage_system_default();
+    }
+
+    /// Windows moved the default to a physical output, typically because a
+    /// headset just connected. Switch the route to it before taking the
+    /// default back to the cable.
+    fn adopt_output(&self, name: &str) -> bool {
+        if devices::is_virtual_name(name) {
+            return false;
+        }
+        let present = self
+            .devices
+            .read()
+            .outputs
+            .iter()
+            .any(|device| device.name == name && !device.is_virtual);
+        if !present {
+            return false;
+        }
+        if self.store.snapshot().settings.output_device.as_deref() == Some(name) {
+            return false;
+        }
+        self.store
+            .mutate(|config| config.settings.output_device = Some(name.to_string()));
+        log::info!("route output follows the system default: {name}");
+        match self.start_engine_inner("route", None) {
+            Ok(_) => true,
+            Err(err) => {
+                self.push_warning(format!("Não foi possível usar \"{name}\" como saída: {err}"));
+                false
+            }
+        }
+    }
+
+    fn apply_route_devices(&self, input: &str, output: &str) -> bool {
+        let mut changed = false;
+        self.store.mutate(|config| {
+            if config.settings.input_device.as_deref() != Some(input) {
+                config.settings.input_device = Some(input.to_string());
+                changed = true;
+            }
+            if config.settings.output_device.as_deref() != Some(output) {
+                config.settings.output_device = Some(output.to_string());
+                changed = true;
+            }
+        });
+        changed
+    }
+
+    fn clear_route_warnings(&self) {
+        let mut warnings = self.warnings.lock();
+        warnings
+            .retain(|warning| warning != ROUTE_OUTPUT_WARNING && warning != ROUTE_INPUT_WARNING);
     }
 
     /// Restarts the running engine when a device or buffer setting changes.
     pub fn restart_if_needed(&self, previous: &Settings, next: &Settings) {
+        let _op = self.route_op.lock();
         let changed = previous.output_device != next.output_device
             || previous.input_device != next.input_device
             || previous.buffer_ms != next.buffer_ms;
@@ -701,6 +963,8 @@ impl AppState {
         match self.engine.start(request.clone()) {
             Ok(()) => {
                 *self.last_start.lock() = Some(request);
+                self.auto_route_pending.store(false, Ordering::Relaxed);
+                self.clear_route_warnings();
                 self.pin_output_level();
             }
             Err(err) => {
@@ -744,8 +1008,20 @@ pub fn emit_view(app: &AppHandle, state: &AppState) {
     state.sync_tray(app);
 }
 
-/// Compares only the sound-shaping fields; master volume and bypass remain
-/// user-owned and never invalidate the selected preset.
+/// Factory sound: the Music preset, no bypass and no ear profile. Master
+/// volume is Windows-owned, so the caller passes the current value back in.
+fn factory_sound_params(volume: f32) -> Result<(String, ProcessingParams), String> {
+    let preset = find_builtin("music").ok_or("Preset padrão não encontrado.")?;
+    let mut params = ProcessingParams::default();
+    params.apply_processing_from(&preset.params);
+    params.volume = volume;
+    params.bypass = false;
+    params.ear_profile = EarProfileParams::default();
+    Ok((preset.id.clone(), params.sanitized()))
+}
+
+/// Compares only the sound-shaping fields; master volume, bypass and the ear
+/// profile remain user-owned and never invalidate the selected preset.
 fn same_shaping(left: &ProcessingParams, right: &ProcessingParams) -> bool {
     let mut left = left.clone();
     let mut right = right.clone();
@@ -753,7 +1029,55 @@ fn same_shaping(left: &ProcessingParams, right: &ProcessingParams) -> bool {
     right.volume = 0.0;
     left.bypass = false;
     right.bypass = false;
+    left.ear_profile = EarProfileParams::default();
+    right.ear_profile = EarProfileParams::default();
     left == right
+}
+
+/// The physical output the route should feed: the saved choice while it
+/// exists, otherwise the Windows default, otherwise the first physical output.
+fn pick_route_output(devices: &DeviceList, preferred: Option<&str>) -> Option<String> {
+    let physical = |name: &str| {
+        devices
+            .outputs
+            .iter()
+            .any(|device| device.name == name && !device.is_virtual)
+    };
+    if let Some(name) = preferred {
+        if physical(name) {
+            return Some(name.to_string());
+        }
+    }
+    if let Some(default) = devices.default_output.as_deref() {
+        if physical(default) {
+            return Some(default.to_string());
+        }
+    }
+    devices
+        .outputs
+        .iter()
+        .find(|device| !device.is_virtual)
+        .map(|device| device.name.clone())
+}
+
+/// The capture side of a virtual cable; never a microphone.
+fn pick_route_input(devices: &DeviceList, preferred: Option<&str>) -> Option<String> {
+    let virtual_input = |name: &str| {
+        devices
+            .inputs
+            .iter()
+            .any(|device| device.name == name && device.is_virtual)
+    };
+    if let Some(name) = preferred {
+        if virtual_input(name) {
+            return Some(name.to_string());
+        }
+    }
+    devices
+        .inputs
+        .iter()
+        .find(|device| device.is_virtual)
+        .map(|device| device.name.clone())
 }
 
 pub fn show_window(app: &AppHandle) {
@@ -794,4 +1118,154 @@ pub fn run_action(app: &AppHandle, state: &AppState, action: &str) -> Result<(),
     let _ = app.emit("state-changed", state.view());
     state.sync_tray(app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::DeviceInfo;
+    use audio_pulse_dsp::{AutoEqFilter, FilterKind};
+
+    fn device(name: &str, is_default: bool, is_virtual: bool) -> DeviceInfo {
+        DeviceInfo {
+            name: name.into(),
+            is_default,
+            is_virtual,
+        }
+    }
+
+    fn device_list(
+        outputs: Vec<DeviceInfo>,
+        inputs: Vec<DeviceInfo>,
+        default_output: Option<&str>,
+    ) -> DeviceList {
+        DeviceList {
+            outputs,
+            inputs,
+            default_output: default_output.map(str::to_string),
+            ..DeviceList::default()
+        }
+    }
+
+    #[test]
+    fn route_output_keeps_the_saved_physical_device() {
+        let list = device_list(
+            vec![
+                device("CABLE Input", false, true),
+                device("Headset", true, false),
+                device("Speakers", false, false),
+            ],
+            vec![],
+            Some("Headset"),
+        );
+        assert_eq!(
+            pick_route_output(&list, Some("Speakers")).as_deref(),
+            Some("Speakers")
+        );
+    }
+
+    #[test]
+    fn route_output_never_uses_the_cable() {
+        let list = device_list(
+            vec![
+                device("CABLE Input", true, true),
+                device("Speakers", false, false),
+            ],
+            vec![],
+            Some("CABLE Input"),
+        );
+        assert_eq!(
+            pick_route_output(&list, Some("CABLE Input")).as_deref(),
+            Some("Speakers")
+        );
+    }
+
+    #[test]
+    fn route_output_falls_back_to_the_windows_default() {
+        let list = device_list(
+            vec![
+                device("Headset", false, false),
+                device("Speakers", true, false),
+            ],
+            vec![],
+            Some("Speakers"),
+        );
+        assert_eq!(pick_route_output(&list, None).as_deref(), Some("Speakers"));
+    }
+
+    #[test]
+    fn route_output_disappears_without_a_physical_device() {
+        let list = device_list(vec![device("CABLE Input", true, true)], vec![], Some("CABLE Input"));
+        assert_eq!(pick_route_output(&list, Some("Headset")), None);
+    }
+
+    #[test]
+    fn route_input_never_picks_a_microphone() {
+        let list = device_list(
+            vec![],
+            vec![
+                device("Microphone", true, false),
+                device("CABLE Output", false, true),
+            ],
+            None,
+        );
+        assert_eq!(
+            pick_route_input(&list, Some("Microphone")).as_deref(),
+            Some("CABLE Output")
+        );
+    }
+
+    #[test]
+    fn route_input_requires_a_virtual_cable() {
+        let list = device_list(vec![], vec![device("Microphone", true, false)], None);
+        assert_eq!(pick_route_input(&list, None), None);
+    }
+
+    #[test]
+    fn protection_toggle_is_part_of_the_preset_shape() {
+        let preset = find_builtin("protection").unwrap().params;
+        let mut current = ProcessingParams::default();
+        current.apply_processing_from(&preset);
+        assert!(current.loud_sound_reduction.enabled);
+        assert!(same_shaping(&preset, &current));
+
+        current.loud_sound_reduction.enabled = false;
+        assert!(
+            !same_shaping(&preset, &current),
+            "disabling hearing protection must stop matching the Protection preset"
+        );
+    }
+
+    #[test]
+    fn factory_sound_is_the_music_preset_without_an_ear_profile() {
+        let music = find_builtin("music").unwrap().params;
+        let (preset_id, params) = factory_sound_params(0.115).unwrap();
+        assert_eq!(preset_id, "music");
+        assert!((params.volume - 0.115).abs() < 1e-6, "volume is Windows-owned");
+        assert!(!params.bypass);
+        assert!(!params.ear_profile.enabled);
+        assert!(params.ear_profile.filters.is_empty());
+        assert!(same_shaping(&music, &params));
+    }
+
+    #[test]
+    fn ear_profile_never_breaks_preset_matching() {
+        let preset = find_builtin("music").unwrap().params;
+        let mut current = ProcessingParams::default();
+        current.apply_processing_from(&preset);
+        current.ear_profile = EarProfileParams {
+            enabled: true,
+            preamp_db: -1.0,
+            filters: vec![AutoEqFilter {
+                kind: FilterKind::Peaking,
+                freq: 3_500.0,
+                gain_db: -2.0,
+                q: 1.15,
+            }],
+        };
+        assert!(
+            same_shaping(&preset, &current),
+            "the ear profile is independent from the selected preset"
+        );
+    }
 }

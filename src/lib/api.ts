@@ -94,6 +94,12 @@ export const api = {
       : Promise.resolve(mockBackend.deletePreset(id));
   },
 
+  restoreSoundDefaults(): Promise<AppView> {
+    return isTauri
+      ? invoke<AppView>("restore_sound_defaults")
+      : Promise.resolve(mockBackend.restoreSoundDefaults());
+  },
+
   exportPreset(id: string, path: string): Promise<string> {
     return isTauri
       ? invoke<string>("export_preset", { id, path })

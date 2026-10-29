@@ -16,6 +16,7 @@ const CATEGORY_ICONS: Record<PresetCategory, IconName> = {
   flat: "equalizer",
   bass: "speaker",
   night: "moon",
+  protection: "shield",
   headphone: "headphone",
   custom: "sparkle",
 };

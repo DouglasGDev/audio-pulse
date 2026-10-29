@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! preamp → AutoEQ → 10-band EQ → tone → bass/sub → spatial → crossfeed
-//!        → adaptive EQ → compressor → volume → ISO 226 loudness → limiter
+//!        → adaptive EQ → compressor → volume → ISO 226 loudness
+//!        → loud sound reduction → limiter
 //! ```
 //!
 //! The chain never allocates while audio is being processed. Parameter updates
@@ -28,9 +29,10 @@ pub mod spectrum;
 pub use chain::{AnalysisSnapshot, Processor};
 pub use params::{
     AdaptiveEqParams, AutoEqFilter, AutoEqParams, BassParams, CompressorParams, CrossfeedParams,
-    FilterKind, LimiterParams, LoudnessParams, ProcessingParams, SpatialMode, SpatialParams,
-    ToneParams, ADAPTIVE_EQ_BANDS, ADAPTIVE_EQ_FREQUENCIES, ADAPTIVE_EQ_MAX_DB, EQ_BAND_COUNT,
-    EQ_FREQUENCIES, MAX_AUTOEQ_FILTERS, SPECTRUM_BANDS,
+    EarProfileParams, FilterKind, LimiterParams, LoudSoundReductionParams, LoudnessParams,
+    ProcessingParams, SpatialMode, SpatialParams, ToneParams, ADAPTIVE_EQ_BANDS,
+    ADAPTIVE_EQ_FREQUENCIES, ADAPTIVE_EQ_MAX_DB, EQ_BAND_COUNT, EQ_FREQUENCIES,
+    MAX_AUTOEQ_FILTERS, SPECTRUM_BANDS,
 };
 pub use presets::{builtin_presets, find_builtin, Preset, PresetCategory};
 

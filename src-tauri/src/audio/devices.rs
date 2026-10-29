@@ -52,7 +52,10 @@ fn enumerate_host(host: &Host) -> DeviceList {
 
     sort_devices(&mut inputs);
     sort_devices(&mut outputs);
-    let virtual_cable_detected = inputs.iter().any(|d| d.is_virtual);
+    // A route needs both halves: the render side receives system audio and
+    // the capture side feeds the DSP.
+    let virtual_cable_detected =
+        inputs.iter().any(|d| d.is_virtual) && outputs.iter().any(|d| d.is_virtual);
 
     DeviceList {
         inputs,

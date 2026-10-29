@@ -6,7 +6,7 @@
 
 <p align="center">
   A low-latency DSP engine for every sound the system plays: 10-band EQ, parametric AutoEQ,<br/>
-  bass synthesis, ISO 226 loudness, dynamic HRTF and local AI ear profiling.
+  bass synthesis, ISO 226 loudness, loud sound reduction, dynamic HRTF and local AI ear profiling.
 </p>
 
 <p align="center">
@@ -44,11 +44,12 @@ on your machine: no account, no telemetry, no cloud processing.
 | Sound | Personalization | Desktop integration |
 | --- | --- | --- |
 | **10-band graphic EQ** — 31 Hz to 16 kHz, ±12 dB, with a live response curve and draggable nodes | **Ear profiling** — local depth model estimates concha geometry and proposes a 2–8 kHz correction | **System-wide routing** — virtual cable plus automatic default-endpoint switch on Windows |
-| **Parametric AutoEQ** — up to 16 PK/LS/HS filters, `ParametricEQ.txt` import, preamp | **Presets** — 8 listening modes and 12 reference headphone profiles | **Volume sync** — the app slider and the Windows volume controller are one control |
+| **Parametric AutoEQ** — up to 16 PK/LS/HS filters, `ParametricEQ.txt` import, preamp | **Presets** — 9 listening modes and 12 reference headphone profiles | **Volume sync** — the app slider and the Windows volume controller are one control |
 | **Adaptive EQ** — 5 octave bands every 20 ms, ±3 dB, predictive headroom; deterministic, not a black box | **Custom presets** — create, export and import JSON profiles | **Per-device profiles** — apply a preset when a specific output starts |
-| **Bass Boost** — low shelf plus missing-fundamental harmonic synthesis | **Ear profile safety** — previous AutoEQ backed up, one-click restore | **Tray, shortcuts, autostart** — control playback without opening the window |
+| **Bass Boost** — low shelf plus missing-fundamental harmonic synthesis | **Ear profile stage** — adds to the preset and AutoEQ; one-click **Restore defaults** | **Tray, shortcuts, autostart** — control playback without opening the window |
 | **Dynamics** — compressor and 5 ms look-ahead limiter | | **Wireless battery** — HID charge reports from USB receivers on Windows |
 | **Loudness** — ISO 226 compensation that follows the master volume | | **Real meters** — 56-band spectrum, L/R levels, gain reduction, CPU, latency and xruns |
+| **Loud sound reduction** — slow stereo compressor after the volume; adjustable intensity and live engagement | | |
 | **Spatial audio** — binaural, dynamic HRTF and 7.1 upmix; crossfeed for headphones | | **Interface** — dark/light, English and pt-BR, responsive |
 
 ## Screenshots
@@ -75,9 +76,15 @@ Click any screenshot to open it at full resolution.
 ```text
 Any application ──► virtual cable ──► Audio Pulse ──► your headphones
                                           │
-preamp → AutoEQ → EQ 10 → tone → bass → spatial → crossfeed
-       → adaptive EQ → compressor → volume → loudness → limiter
+subsonic → preamp → AutoEQ → EQ 10 → tone → bass → spatial
+        → crossfeed → adaptive EQ → compressor → volume → loudness
+        → loud sound reduction → limiter
 ```
+
+The first stage is a 4th-order 20 Hz Butterworth high-pass: it removes DC and
+infrasound that displace the diaphragm without being audible — felt exactly as
+pressure in the ear. It sits below the 31 Hz EQ band, so it does not change the
+bass you hear.
 
 - **One process, one audio thread.** CPAL owns the input and output streams for
   the whole session. Buffers, filters and spectra are pre-allocated; parameter
@@ -89,7 +96,8 @@ preamp → AutoEQ → EQ 10 → tone → bass → spatial → crossfeed
   xruns instead of letting the queues grow.
 - **Rust DSP crate.** [`crates/audio-pulse-dsp`](crates/audio-pulse-dsp) is pure
   DSP with no device dependency: RBJ biquads, bass synthesis, spatial renderer,
-  adaptive EQ, compressor, limiter, ISO 226 loudness and spectrum analysis.
+  adaptive EQ, compressor, limiter, ISO 226 loudness, loud sound reduction and
+  spectrum analysis.
 
 Built with Tauri 2, Rust, React 19, TypeScript, Vite 8, CPAL, `ringbuf`,
 `arc-swap` and ONNX Runtime (`ort`, statically linked).
@@ -98,16 +106,21 @@ Built with Tauri 2, Rust, React 19, TypeScript, Vite 8, CPAL, `ringbuf`,
 
 The **Ear** page guides you through a 512×512 crop of your ear, then runs
 [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small)
-(int8 ONNX, ~26 MB) on the local CPU. A skin mask and an adaptive depth basin
-locate the concha, four geometry metrics drive a small parametric correction,
-and three peaking filters in 2–8 kHz are proposed as an AutoEQ profile.
+(fp32 ONNX, ~95 MB) on the local CPU. An adaptive zone search over the depth map
+locates the concha, four geometry metrics drive a small parametric correction,
+and three peaking filters in 2–8 kHz are proposed as a profile.
 
 - The photo is decoded, cropped and analyzed **on your machine**; it is never
   uploaded and no network request is made during analysis.
 - The model is downloaded automatically the first time the page opens, from
   Hugging Face, and verified against a pinned SHA-256 before use.
-- Applying a profile is always explicit. The previous AutoEQ is saved first and
-  **Restore previous AutoEQ** brings it back exactly.
+- The profile runs as its **own stage**, between AutoEQ and the graphic EQ: it
+  adds to the preset and to AutoEQ instead of replacing them, and presets never
+  carry or clear it.
+- Applying a profile is always explicit, and **Remove profile** disables it
+  without touching the rest of the chain. **Restore defaults** in Settings
+  returns to the Music preset with an empty ear profile, keeping the Windows
+  master volume.
 - Low confidence, off-center crops, missing concha, dark or overexposed photos
   block application instead of guessing.
 
@@ -164,7 +177,10 @@ system through a virtual cable:
    downloads the official VB-CABLE package, verifies its Authenticode signature,
    runs it (one UAC prompt) and selects `CABLE Output` as capture. While the
    route is active, Windows' default output is switched to `CABLE Input` and
-   restored when you stop or quit.
+   restored when you stop or quit. If you plug in headphones or change the
+   default output, the route follows the new device and takes the cable back;
+   if the headphones or cable disappear, it restarts on its own and shows a
+   warning.
 2. **macOS** — install BlackHole 2ch from the app, set it as the system output,
    then select it as capture and your headphones as output.
 3. **Linux** — create a null sink and use its monitor as capture:

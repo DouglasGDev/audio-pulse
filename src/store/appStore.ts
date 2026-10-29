@@ -11,7 +11,6 @@ import { detectedLanguage, translate } from "../lib/i18n";
 import {
   EMPTY_TELEMETRY,
   type AppView,
-  type AutoEqParams,
   type EarAnalysis,
   type EarPhotoSelection,
   type EngineMode,
@@ -29,6 +28,7 @@ export type Page =
   | "equalizer"
   | "spatial"
   | "dynamics"
+  | "hearing"
   | "presets"
   | "ear"
   | "settings";
@@ -44,13 +44,11 @@ interface AppStore {
   engineBusy: boolean;
   cableBusy: boolean;
   earAnalysis: EarAnalysis | null;
-  earBackup: AutoEqParams | null;
   earPhoto: EarPhotoSelection | null;
   bootstrap: () => Promise<void>;
   setPage: (page: Page) => void;
   applyView: (view: AppView) => void;
   setEarAnalysis: (analysis: EarAnalysis | null) => void;
-  setEarBackup: (backup: AutoEqParams | null) => void;
   setEarPhoto: (photo: EarPhotoSelection | null) => void;
   patchParams: (mutate: (params: ProcessingParams) => void) => void;
   setVolume: (volume: number) => void;
@@ -59,6 +57,7 @@ interface AppStore {
   applyPreset: (id: string) => Promise<void>;
   savePreset: (name: string) => Promise<boolean>;
   deletePreset: (id: string) => Promise<void>;
+  restoreSoundDefaults: () => Promise<void>;
   exportPreset: (id: string) => Promise<void>;
   importPreset: () => Promise<void>;
   importAutoEq: () => Promise<void>;
@@ -77,55 +76,46 @@ interface AppStore {
 const EAR_STORAGE_KEY = "audiopulse.ear-profile";
 const LEGACY_EAR_STORAGE_KEY = "sonicenhance.ear-profile";
 
-interface StoredEarProfile {
-  analysis: EarAnalysis | null;
-  backup: AutoEqParams | null;
-}
-
-function readStoredEarProfile(): StoredEarProfile {
+function readStoredEarAnalysis(): EarAnalysis | null {
   try {
     const raw =
       window.localStorage.getItem(EAR_STORAGE_KEY) ??
       window.localStorage.getItem(LEGACY_EAR_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<StoredEarProfile>;
-      window.localStorage.setItem(EAR_STORAGE_KEY, raw);
-      return {
-        analysis:
-          parsed.analysis && Array.isArray(parsed.analysis.filters)
-            ? parsed.analysis
-            : null,
-        backup:
-          parsed.backup && Array.isArray(parsed.backup.filters)
-            ? parsed.backup
-            : null,
+      const parsed = JSON.parse(raw) as {
+        analysis?: Partial<EarAnalysis>;
       };
+      if (parsed.analysis && Array.isArray(parsed.analysis.filters)) {
+        const analysis = parsed.analysis as EarAnalysis;
+        window.localStorage.setItem(
+          EAR_STORAGE_KEY,
+          JSON.stringify({ version: 2, analysis }),
+        );
+        return analysis;
+      }
     }
   } catch {
     // A corrupt or unavailable store must not block the app.
   }
-  return { analysis: null, backup: null };
+  return null;
 }
 
-function persistEarProfile(
-  analysis: EarAnalysis | null,
-  backup: AutoEqParams | null,
-) {
+function persistEarAnalysis(analysis: EarAnalysis | null) {
   try {
-    if (!analysis && !backup) {
+    if (!analysis) {
       window.localStorage.removeItem(EAR_STORAGE_KEY);
     } else {
       window.localStorage.setItem(
         EAR_STORAGE_KEY,
-        JSON.stringify({ analysis, backup }),
+        JSON.stringify({ version: 2, analysis }),
       );
     }
   } catch {
-    // Quota or private mode: the in-memory profile still works.
+    // Quota or private mode: the in-memory analysis still works.
   }
 }
 
-const storedEar = readStoredEarProfile();
+const storedEarAnalysis = readStoredEarAnalysis();
 
 let bootstrapPromise: Promise<void> | null = null;
 let paramsTimer: number | null = null;
@@ -189,8 +179,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     ready: false,
     engineBusy: false,
     cableBusy: false,
-    earAnalysis: storedEar.analysis,
-    earBackup: storedEar.backup,
+    earAnalysis: storedEarAnalysis,
     earPhoto: null,
 
     language: lang,
@@ -218,12 +207,7 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     setEarAnalysis: (analysis) => {
       set({ earAnalysis: analysis });
-      persistEarProfile(analysis, get().earBackup);
-    },
-
-    setEarBackup: (backup) => {
-      set({ earBackup: backup });
-      persistEarProfile(get().earAnalysis, backup);
+      persistEarAnalysis(analysis);
     },
 
     setEarPhoto: (photo) => set({ earPhoto: photo }),
@@ -317,6 +301,18 @@ export const useAppStore = create<AppStore>((set, get) => {
         const view = await api.deletePreset(id);
         set({ view });
         get().toast(translate(lang(), "toast.deleted"), "success");
+      } catch (error) {
+        fail(error);
+      }
+    },
+
+    restoreSoundDefaults: async () => {
+      cancelParamsTimer();
+      try {
+        const view = await api.restoreSoundDefaults();
+        set({ view, earAnalysis: null });
+        persistEarAnalysis(null);
+        get().toast(translate(lang(), "toast.defaultsRestored"), "success");
       } catch (error) {
         fail(error);
       }

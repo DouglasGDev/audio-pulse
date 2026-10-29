@@ -5,9 +5,10 @@ use base64::Engine;
 use image::{ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
-use super::geometry::{Geometry, CROP_SIZE, radius_at};
+use super::geometry::{zone_radius_at, Geometry, CROP_SIZE, radius_at};
 
 const GUIDE: [u8; 3] = [92, 228, 255];
+const ZONE: [u8; 3] = [120, 255, 190];
 const BASIN: [u8; 3] = [255, 150, 70];
 
 fn blend(pixel: &mut Rgb<u8>, color: [u8; 3], alpha: f32) {
@@ -36,6 +37,10 @@ pub fn render(rgb: &RgbImage, geometry: &Geometry) -> Result<String, String> {
                 blend(canvas.get_pixel_mut(x as u32, y as u32), GUIDE, 0.55);
             } else if (radius - 0.78).abs() < 0.0035 {
                 blend(canvas.get_pixel_mut(x as u32, y as u32), GUIDE, 0.22);
+            }
+            let zone = zone_radius_at(x, y, geometry.zone_center_x, geometry.zone_center_y);
+            if (zone - 1.0).abs() < 0.045 && radius <= 1.0 {
+                blend(canvas.get_pixel_mut(x as u32, y as u32), ZONE, 0.40);
             }
             if geometry.basin[index] {
                 blend(canvas.get_pixel_mut(x as u32, y as u32), BASIN, 0.26);

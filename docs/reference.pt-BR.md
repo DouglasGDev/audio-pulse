@@ -4,7 +4,7 @@
 > solução de problemas. Para a visão geral do produto, volte ao
 > [README em português](../README.md) ou ao [README em inglês](../README.en.md).
 
-Aprimoramento de áudio em tempo real para **qualquer fone com fio ou Bluetooth** no Windows, macOS e Linux. O processamento acontece fora do player: o sistema inteiro passa pelo motor DSP do Audio Pulse, que aplica equalização, Bass Boost, dinâmica, compensação de loudness, crossfeed, áudio espacial e equalização adaptativa.
+Aprimoramento de áudio em tempo real para **qualquer fone com fio ou Bluetooth** no Windows, macOS e Linux. O processamento acontece fora do player: o sistema inteiro passa pelo motor DSP do Audio Pulse, que aplica equalização, Bass Boost, dinâmica, compensação de loudness, redução de sons altos, crossfeed, áudio espacial e equalização adaptativa.
 
 Construído com **Tauri 2 + Rust + React**. O áudio é processado inteiramente em Rust; o webview só desenha a interface e envia parâmetros.
 
@@ -14,15 +14,16 @@ Construído com **Tauri 2 + Rust + React**. O áudio é processado inteiramente 
 
 - **Equalizador gráfico de 10 bandas** (31 Hz – 16 kHz, ±12 dB, Q 1,41) com curva de resposta em tempo real e nós arrastáveis.
 - **Pré-amplificador** (−24 a +12 dB) e **AutoEQ paramétrico** com até 16 filtros PK/LS/HS.
-- **Perfil por foto da orelha (estimativa local)**: um modelo de profundidade roda no dispositivo, estima a geometria da concha e do hélice e gera três filtros de 2–8 kHz aplicáveis ao AutoEQ. A foto nunca sai do computador.
+- **Perfil por foto da orelha (estimativa local)**: um modelo de profundidade roda no dispositivo, estima a geometria da concha e do hélice e gera três filtros de 2–8 kHz em um estágio próprio, somado ao preset e ao AutoEQ. A foto nunca sai do computador.
 - **Tone controls**: médios (peaking em 1,5 kHz) e agudos (high shelf em 6 kHz).
 - **Bass Boost / subwoofer virtual** com intensidade, frequência de corte e síntese de harmônicos.
 - **Compressor** e **limiter com look-ahead** de 5 ms para evitar distorção e clipping.
 - **Compensação de loudness ISO 226** dependente do volume.
+- **Redução de sons altos**: compressor lento e estéreo aplicado depois do volume master, com intensidade ajustável e atuação em tempo real. Faz parte do preset **Proteção** e funciona com qualquer fone, sem depender de recurso do fabricante.
 - **Áudio espacial**: modos Binaural, **HRTF dinâmico** (ITD/ILD acompanham a imagem estéreo) e Surround 7.1 virtual, com largura do palco e ambiência.
 - **Equalização adaptativa**: análise de cinco bandas de oitava a cada 20 ms, com correções de até ±3 dB e proteção preditiva de pico.
 - **Crossfeed** para fones abertos ou fechados, com atraso ajustável.
-- **Presets**: 8 modos de uso + 12 perfis de fones, criação/exclusão/exportação/importação, AutoEQ.
+- **Presets**: 9 modos de uso + 12 perfis de fones, criação/exclusão/exportação/importação, AutoEQ.
 - **Perfis por dispositivo**: aplica um preset automaticamente ao iniciar com uma saída específica.
 - **Medidores reais**: espectro de 56 bandas, níveis L/R, redução de ganho, correção do EQ adaptativo em 5 bandas, CPU, latência e falhas (xruns).
 - **Bypass instantâneo**, volume master, atalhos globais, bandeja do sistema e inicialização automática.
@@ -44,7 +45,7 @@ Construído com **Tauri 2 + Rust + React**. O áudio é processado inteiramente 
 | Comunicação | comandos Tauri + eventos; parâmetros lock-free com `arc-swap` |
 | Buffer | `ringbuf` SPSC + reamostragem linear com correção de clock |
 | Persistência | JSON com gravação atômica e debounce |
-| Profundidade | ONNX Runtime (`ort`) + Depth Anything V2 Small int8, execução local na CPU |
+| Profundidade | ONNX Runtime (`ort`) + Depth Anything V2 Small fp32, execução local na CPU |
 
 ---
 
@@ -79,11 +80,14 @@ Construído com **Tauri 2 + Rust + React**. O áudio é processado inteiramente 
 ### Cadeia de processamento
 
 ```
-preamp → AutoEQ → EQ 10 bandas → tone → Bass Boost → spatial
-→ crossfeed → adaptive EQ → compressor → volume → loudness → limiter
+subsônico → preamp → AutoEQ → perfil de orelha → EQ 10 bandas → tone
+→ Bass Boost → spatial → crossfeed → adaptive EQ → compressor → volume
+→ loudness → redução de sons altos → limiter
 ```
 
-O **bypass** retorna a amostra original antes de qualquer estágio (passthrough exato), mantendo apenas o volume master. Alterar o bypass também zera compressor e limiter para evitar resíduos.
+O estágio **subsônico** é um high-pass Butterworth de 4ª ordem em **20 Hz**, aplicado antes do preamp. DC e infrassom não são audíveis, mas deslocam o diafragma e o resultado é sentido como pressão no ouvido, mesmo em volume baixo. Dois biquads em cascata dão 24 dB/oct: medido nos parâmetros reais do app, −47 dB em 5 Hz e −23 dB em 10 Hz, com variação de apenas −0,1 dB em 31 Hz — abaixo da primeira banda do EQ, sem tocar no grave audível.
+
+O **bypass** retorna a amostra original antes de qualquer estágio (passthrough exato), mantendo apenas o volume master. Alterar o bypass também zera compressor, redução de sons altos e limiter para evitar resíduos.
 
 Alterações **discretas** (aplicar preset, ligar/desligar bypass, trocar o modo espacial) trocam o bloco inteiro de coeficientes de uma vez. Para isso não estalar, o processador desce a saída em 2 ms, aplica os novos parâmetros em silêncio e sobe em 30 ms. Sliders e volume são contínuos e passam direto, sem fade.
 
@@ -129,7 +133,7 @@ audio-pulse/
 │   └── tauri.conf.json
 ├── src/
 │   ├── components/              # shell, controles, gráficos, recorte da orelha, modais
-│   ├── pages/                   # Painel, Equalizador, Espacial, Dinâmica, Presets, Orelha, Ajustes
+│   ├── pages/                   # Painel, Equalizador, Espacial, Dinâmica, Audição, Presets, Orelha, Ajustes
 │   ├── store/appStore.ts        # estado, debounce e updates otimistas
 │   ├── lib/api.ts               # ponte Tauri + backend simulado do navegador
 │   ├── lib/dsp.ts               # curva de resposta idêntica ao DSP
@@ -221,7 +225,7 @@ O Audio Pulse não inclui driver próprio. Para processar **todo** o áudio, use
 ### Windows — VB-CABLE
 
 1. Em **Ajustes → Áudio**, clique em **Instalar cabo virtual** e aprove o UAC. O app baixa o pacote oficial do VB-Audio, confere a assinatura Authenticode e instala em modo silencioso; a captura passa a apontar para `CABLE Output` automaticamente.
-2. No Audio Pulse, em **Ajustes → Áudio**, escolha **Dispositivo de saída**: seu fone/headset. O app define `CABLE Input` como saída padrão do Windows enquanto a rota está ativa e restaura a saída anterior ao parar ou fechar — não é preciso mexer nas configurações de som.
+2. No Audio Pulse, em **Ajustes → Áudio**, escolha **Dispositivo de saída**: seu fone/headset. O app define `CABLE Input` como saída padrão do Windows enquanto a rota está ativa e restaura a saída anterior ao parar ou fechar — não é preciso mexer nas configurações de som. Se você conectar outro fone ou trocar a saída padrão, a rota acompanha o novo dispositivo e retoma `CABLE Input`; se o fone ou o cabo desaparecerem, ela reinicia sozinha e avisa na interface.
 3. Inicie o motor em **Rota de áudio** (ele também inicia sozinho ao abrir o app quando captura e saída já estão configuradas).
 
 A instalação automática exige internet e aprovação de administrador. Se preferir, instale manualmente pelo [site do VB-Audio](https://vb-audio.com/Cable/) e reinicie.
@@ -274,15 +278,16 @@ Na tela **Painel**, os botões **Ruído rosa**, **Varredura** e **Arquivo WAV** 
    - **Equalizador** — arraste os nós da curva ou use os sliders verticais; pré-amplificador, AutoEQ, tone, Bass Boost, loudness, crossfeed e EQ adaptativo.
    - **Espacial** — desligado, binaural, HRTF dinâmico ou surround 7.1; largura e ambiência.
    - **Dinâmica** — compressor e limiter, com curvas e redução de ganho em tempo real.
+   - **Audição** — redução de sons altos, atuação do estágio, nível de saída e atalho para o preset Proteção.
    - **Presets** — presets de modo, perfis de fone, presets personalizados e importação AutoEQ.
-   - **Orelha** — foto local, enquadramento, análise de profundidade, curva estimada de 2–8 kHz e aplicação/restauração do AutoEQ.
+   - **Orelha** — foto local, enquadramento, análise de profundidade, curva estimada de 2–8 kHz e aplicação/remoção do perfil de orelha.
    - **Ajustes** — tema, idioma, buffer, dispositivos, perfis por dispositivo, atalhos e inicialização.
 4. **Bypass** na barra superior (ou atalho) compara instantaneamente com o som original.
 5. Ao alterar qualquer parâmetro de modelagem, o preset ativo passa a **Personalizado**; volume e bypass nunca são sobrescritos por um preset.
 
 ### Presets e perfis
 
-- **8 modos embutidos**: Música, Cinema, Jogos, Podcast, Vocal, Flat, Bass e Noturno.
+- **9 modos embutidos**: Música, Cinema, Jogos, Podcast, Vocal, Flat, Bass, Noturno e Proteção.
 - **12 perfis de fone**: Sony WH-1000XM4/XM5, Bose QC45/QC Ultra, Sennheiser HD 600/Momentum 4, Apple AirPods Max/Pro 2ª ger., JBL Tune 770NC, Samsung Galaxy Buds2 Pro, Audio-Technica ATH-M50x e Beyerdynamic DT 770 Pro.
 
 > Os perfis embutidos são **curvas de referência Audio Pulse**, não medições de laboratório. Para correção específica do seu exemplar, importe um perfil AutoEQ medido.
@@ -305,10 +310,10 @@ O parser aceita `PK`, `LS`/`LSC` e `HS`/`HSC`, ignora filtros `OFF` e comentári
 
 1. Abra **Orelha** e escolha uma foto nítida do pavilhão inteiro, com luz difusa e sem contraluz. Cabelo sobre a concha atrapalha a leitura.
 2. Ajuste **zoom**, **rotação** e posição dentro da guia. O recorte é sempre 512×512 e nada é enviado para a rede.
-3. Na primeira vez que a página é aberta, o modelo de profundidade (~26 MB) é baixado automaticamente; o progresso aparece no cartão **Modelo**. Se o download falhar, use o botão para tentar de novo. **Analisar foto** mostra o recorte com a concha destacada, a confiança, quatro métricas e a curva estimada.
-4. Se a confiança for suficiente, **Aplicar ao AutoEQ** substitui a curva atual. O AutoEQ anterior é salvo automaticamente; **Remover perfil** desliga a correção e **Restaurar AutoEQ anterior** devolve exatamente o estado anterior.
+3. Na primeira vez que a página é aberta, o modelo de profundidade (~95 MB) é baixado automaticamente; o progresso aparece no cartão **Modelo**. Se o download falhar, use o botão para tentar de novo. **Analisar foto** mostra o recorte com a concha destacada, a confiança, quatro métricas e a curva estimada.
+4. Se a confiança for suficiente, **Aplicar perfil** grava a curva em um estágio próprio, depois do AutoEQ. O preset e o AutoEQ continuam intactos; **Remover perfil** zera esse estágio. Para voltar ao som de fábrica, use **Restaurar padrões** em Ajustes.
 
-A análise e o backup ficam salvos entre sessões. Aplicar nunca acontece sozinho, e avisos de baixa confiança, enquadramento ou iluminação bloqueiam a aplicação.
+A última análise fica salva entre sessões, e o perfil aplicado fica no `config.json` junto dos demais parâmetros. Aplicar nunca acontece sozinho, e avisos de baixa confiança, enquadramento ou iluminação bloqueiam a aplicação.
 
 ### Exportar/importar presets
 
@@ -363,6 +368,25 @@ O objetivo é o **fenômeno do fundamental ausente**: fones pequenos não reprod
 
 Harmônicos, corte e intensidade são independentes; com harmônicos em 0% resta apenas o shelf.
 
+## Como funciona a redução de sons altos
+
+A proteção auditiva é um compressor de programa lento, estéreo e feed-forward colocado **depois do volume master e do loudness**. A posição importa: o estágio reage ao nível que chega aos ouvidos, não ao nível do arquivo.
+
+- **Limiar** = `−10 − 14 × intensidade` dBFS (−24 dBFS na intensidade máxima).
+- **Proporção** = `1,5 + 2,5 × intensidade` (4:1 no máximo).
+- **Ataque de 5 ms, liberação de 200 ms, joelho de 8 dB e sem ganho de compensação** — o estágio só reduz, nunca levanta o sinal.
+- **Estéreo ligado**: os dois canais recebem a mesma redução, então a imagem não se desloca.
+
+A resposta é **espectralmente plana**: o mesmo compressor atua em todo o espectro, sem alterar o equilíbrio tonal. Medido no crate de DSP: um tom de 200 Hz em amplitude 0,5 sofre mais de 8 dB de redução; um tom de 1 kHz em amplitude 0,002 (≈ −54 dBFS) passa com desvio menor que 0,5 dB; 200 Hz e 4 kHz recebem a mesma redução dentro de 1 dB.
+
+A intensidade vai de 0 a 100 %; abaixo de 1 % o estágio fica inativo mesmo ligado. O medidor **Atuação** da página **Audição** mostra a redução de ganho em tempo real (escala de 18 dB), e o nível de saída em dBFS vem da telemetria real do motor.
+
+O estágio faz parte do preset **Proteção**: aplicá-lo liga a redução, e aplicar qualquer outro preset a desliga. Desligar a chave manualmente também encerra o preset ativo — o selo **Proteção** não fica marcado com a proteção desligada.
+
+> É processamento de sinal, não um dispositivo de proteção auditiva certificado. Para sessões longas em volume alto, a maior proteção continua sendo reduzir o volume.
+
+O recurso foi inspirado na redução de sons altos do LibrePods e reimplementado como DSP independente de fone: no Windows, controlar os AirPods diretamente exigiria um driver de kernel, então a proteção funciona com qualquer fone conectado ao computador.
+
 ## Como funciona o Spatial Audio
 
 O modo **Surround** faz upmix de estéreo para 8 canais virtuais — L, R, C, LFE, Ls, Rs, Lb, Rb — com níveis e posições fixas. Cada alto-falante virtual é renderizado com um modelo de cabeça esférica:
@@ -416,20 +440,24 @@ O medidor na página do equalizador mostra os cinco ganhos em tempo real, com o 
 
 ## Como funciona o perfil por foto da orelha
 
-A análise é **local e sob demanda**: a foto é decodificada no backend, recortada em 512×512 e passada uma vez pelo modelo **Depth Anything V2 Small** (ONNX int8, entrada 518×518, normalização ImageNet). A saída é **profundidade inversa relativa** — valores maiores significam mais perto da câmera. O modelo roda na CPU com 1–4 threads e não participa do caminho de áudio; neste ambiente a análise levou cerca de 1,5–2,7 s.
+A análise é **local e sob demanda**: a foto é decodificada no backend, recortada em 512×512 e passada uma vez pelo modelo **Depth Anything V2 Small** (ONNX fp32, entrada 518×518, normalização ImageNet). A saída é **profundidade inversa relativa** — valores maiores significam mais perto da câmera. O modelo roda na CPU com 1–4 threads e não participa do caminho de áudio.
 
 A geometria vem da imagem, não de marcos anatômicos pontuais:
 
-- Uma máscara de pele em YCbCr descarta cabelo, fundo e roupa; a busca do fundo e as estatísticas de borda usam apenas pele.
-- A concha é a região conectada mais profunda dentro de uma zona elíptica na parte inferior do recorte. O crescimento parte do pixel de pele mais profundo e usa uma banda adaptativa de 10–22% da variação de profundidade.
-- `concha_size` é a área do fundo dividida pela área da guia; `concha_depth` é a diferença entre a mediana da borda (hélice/anti-hélice) e a média do fundo, normalizada por 0,5; `helix_prominence` compara os percentis 90 e 50 da borda superior.
-- A confiança combina contraste de profundidade, profundidade do fundo e centralização, com penalidades para fundo encostado no limite, ausência de fundo e pouca pele. Os avisos `no_ear`, `no_basin`, `off_center`, `low_contrast`, `dark` e `overexposed` aparecem na interface e bloqueiam a aplicação quando o resultado não é confiável.
+- Uma máscara de pele em YCbCr descarta cabelo, fundo e roupa; a busca da concha e as estatísticas de borda usam apenas pele.
+- A profundidade é normalizada pelo percentil 2–98 dentro da guia, suavizada com dois box blurs de raio 3 restritos à guia. A régua do corpo é o `ear_span` — diferença entre os percentis 90 e 10 da profundidade suavizada na guia, com piso de 0,04.
+- A zona da concha é uma elipse de 0,30 × 0,28 do raio da guia, e seu centro é **procurado** numa janela de ±0,30 na horizontal e −0,22 a +0,30 na vertical, em passos de 0,04. O candidato vence pelo contraste entre o quartil inferior de um anel de 12 setores ao redor da zona e o disco interno, dividido pelo `ear_span`, com penalidade de 0,10 por raio além de 0,70 de deslocamento. Isso encontra a concha onde ela está, em vez de assumir o centro da guia.
+- O fundo é a região conectada ao pixel mais profundo da zona, limitada pela iso-linha de metade do contraste anel–disco. A bacia só existe com pelo menos 200 pixels e contraste ≥ 0,05.
+- `concha_size` é a área da bacia dividida pela área da zona; `concha_depth` é o contraste dividido por 0,22, limitado a 0–1; `helix_prominence` compara os percentis 90 e 50 da borda superior; `depth_range` é o intervalo 5–95% da guia.
+- A confiança é `0,30 × contraste + 0,35 × bacia + 0,15 × cerco + 0,20 × pele`, multiplicada por 0,35 no escuro, 0,55 em superexposição, 0,85 se a bacia encosta na borda da zona, 0,25 sem bacia e 0,40 com pouca pele. Os avisos `low_contrast` (span < 0,10), `no_basin`, `off_center` (zona a mais de 0,95 do centro), `no_ear`, `dark` e `overexposed` aparecem na interface e bloqueiam a aplicação quando o resultado não é confiável.
 
 O mapeamento para áudio é uma **heurística paramétrica**, não uma HRTF medida. A direção vem de estudos de antropometria da pinna (concha maior e mais profunda tende a deslocar e reforçar a primeira ressonância da concha), e a correção move três filtros peaking em 2–8 kHz na direção da média da população. O pré-amplificador compensa o maior ganho positivo. O resultado é composto por três filtros `PK` e um preamp — **não é convolução, não é reverb e não é uma rede neural no áudio**.
 
+O perfil aplicado vive em `params.earProfile` e roda em um **estágio próprio entre o AutoEQ e o EQ gráfico**, com o mesmo motor de biquads. Presets não carregam o perfil: aplicar um preset preserva o perfil atual, salvar um preset personalizado o omite, e **Restaurar padrões** em Ajustes volta ao preset Música com o estágio vazio — preservando o volume master, que pertence ao Windows.
+
 O que não existe aqui: detecção dos marcos hélice/anti-hélice/lóbulo como pontos nomeados, HRTF individual, modelagem do canal auditivo, orelha interna ou sombra da cabeça. Uma foto 2D não contém essas informações. O perfil é um ponto de partida para experimentar, não substitui uma medição AutoEQ do fone.
 
-**Modelo e licenças.** O arquivo é o `onnx/model_int8.onnx` de [`onnx-community/depth-anything-v2-small`](https://huggingface.co/onnx-community/depth-anything-v2-small) — 27.258.801 bytes, SHA-256 `01aa7a23de3f4a0ee1a2bb9997e6918104c85a9f95dea46d27b9b3fb0c6b9001`, licença **Apache-2.0**. O download acontece automaticamente na primeira vez que a página **Orelha** é aberta (o botão serve para repetir em caso de falha), e o arquivo fica na pasta `models/` ao lado do `config.json`. O ONNX Runtime é vinculado estaticamente ao executável; a análise não faz chamadas de rede, e a foto nunca é enviada.
+**Modelo e licenças.** O arquivo é o `onnx/model.onnx` (fp32) de [`onnx-community/depth-anything-v2-small`](https://huggingface.co/onnx-community/depth-anything-v2-small) — 99.060.839 bytes, SHA-256 `afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c`, licença **Apache-2.0**. O download acontece automaticamente na primeira vez que a página **Orelha** é aberta (o botão serve para repetir em caso de falha), e o arquivo fica na pasta `models/` ao lado do `config.json`. O ONNX Runtime é vinculado estaticamente ao executável; a análise não faz chamadas de rede, e a foto nunca é enviada.
 
 ---
 
@@ -458,7 +486,7 @@ A gravação é atômica (arquivo temporário + rename) e sofre debounce para n�
 
 Na primeira execução do Audio Pulse, se ainda não existir `config.json` na pasta nova, o app copia automaticamente a configuração, o `route-default.json` e a pasta `models/` de `%APPDATA%\Audio Pulse` (ou do diretório equivalente no macOS/Linux). A pasta antiga não é apagada, então voltar para uma versão anterior continua funcionando.
 
-O perfil da orelha (última análise e AutoEQ anterior) fica no `localStorage` do webview, na chave `audiopulse.ear-profile`; aplicar o perfil grava o AutoEQ em `config.json` pelo caminho normal de parâmetros. O modelo de profundidade baixado fica em `models/depth-anything-v2-small-int8.onnx` ao lado do `config.json`; apagar esse arquivo força um novo download na próxima análise.
+A última análise da orelha fica no `localStorage` do webview, na chave `audiopulse.ear-profile`; o perfil aplicado (`enabled`, preamp e filtros) fica em `params.earProfile` no `config.json`, junto dos demais parâmetros. Remover o perfil zera esse estágio, e **Restaurar padrões** zera junto com o resto do som. O modelo de profundidade baixado fica em `models/depth-anything-v2-small.onnx` ao lado do `config.json`; apagar esse arquivo força um novo download na próxima análise. O arquivo int8 de versões anteriores é removido após o primeiro download do fp32.
 
 Enquanto a rota está ativa, o endpoint anterior fica registrado em `route-default.json` ao lado do `config.json`. Se o app for encerrado à força, esse registro é usado na próxima abertura para devolver a saída padrão e o volume ao fone.
 
@@ -473,7 +501,7 @@ Enquanto a rota está ativa, o endpoint anterior fica registrado em `route-defau
 - **EQ adaptativo não é correção de sala nem de fone.** Ele equilibra o material em cinco bandas de oitava; não mede a resposta do fone e não substitui AutoEQ. Não há aprendizado de máquina: o controlador é preditivo e determinístico.
 - **ISO 226 aproximada.** A compensação usa o volume master como proxy do nível de escuta, sem calibração de SPL.
 - **AutoEQ apenas paramétrico.** Arquivos GraphicEQ e respostas de impulso (FIR) não são importados.
-- **O perfil por foto é uma estimativa geométrica, não uma HRTF.** Ele depende de enquadramento, iluminação e da máscara de pele, e o mapeamento para três filtros é heurístico. Foi validado com o modelo real em duas fotos de orelha; não há validação clínica nem medição individual. Trate a curva como ponto de partida e use **Restaurar AutoEQ anterior** para voltar atrás.
+- **O perfil por foto é uma estimativa geométrica, não uma HRTF.** Ele depende de enquadramento, iluminação e da máscara de pele, e o mapeamento para três filtros é heurístico. Foi validado com o modelo real em três fotos de orelha; não há validação clínica nem medição individual. Trate a curva como ponto de partida e use **Remover perfil** ou **Restaurar padrões** para voltar atrás.
 - **Sem marcos anatômicos nomeados e sem redes neurais no áudio.** O app não detecta hélice/anti-hélice/lóbulo como pontos (o MediaPipe Face Landmarker não modela a pinna), não gera HRTF individual e não usa LSTM/Transformer nem convolução: o perfil por foto produz somente três filtros peaking e um preamp.
 - **Perfis de fone embutidos são curvas de referência**, não medições.
 - **Bluetooth** adiciona latência fora do controle do app; sincronizar vídeo pode exigir ajustes no player.
@@ -490,7 +518,7 @@ Enquanto a rota está ativa, o endpoint anterior fica registrado em `route-defau
 Em **Ajustes → Áudio**, clique em **Instalar cabo virtual** e aprove a elevação. Se a instalação automática não estiver disponível (Linux ou falha de rede), instale o VB-Cable/BlackHole/sink nulo manualmente, clique em **Atualizar** e selecione a captura. O detector reconhece nomes como Cable Output, VB-Audio, VoiceMeeter, BlackHole, Soundflower, “Monitor of”, PipeWire e null sink.
 
 **Motor inicia, mas não há som**
-No Windows, o app troca a saída padrão para `CABLE Input` sozinho enquanto a rota está ativa e a restaura ao parar. Confira se a captura selecionada é a ponta correta (ex.: `CABLE Output`), se o fone está na saída do app, se o volume master não está zerado e se o bypass não está ativo. Se o app for encerrado à força, a saída anterior é restaurada na próxima abertura.
+No Windows, o app troca a saída padrão para `CABLE Input` sozinho enquanto a rota está ativa e a restaura ao parar. Ela também se recupera quando o fone é conectado ou desconectado e quando outro aplicativo troca a saída padrão. Confira se a captura selecionada é a ponta correta (ex.: `CABLE Output`), se o fone está na saída do app, se o volume master não está zerado e se o bypass não está ativo. Se o app for encerrado à força, a saída anterior é restaurada na próxima abertura.
 
 **Estalos, cortes ou xruns**
 Aumente o buffer em Ajustes → Áudio. Evite taxas diferentes entre cabo e fone; se possível, use 48 kHz em ambos. Bluetooth costuma exigir 30 ms ou mais.
