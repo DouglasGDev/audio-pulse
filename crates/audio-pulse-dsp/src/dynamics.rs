@@ -78,6 +78,7 @@ impl Compressor {
     }
 
     pub fn set_params(&mut self, params: CompressorParams, sample_rate: f32) {
+        let was_enabled = self.enabled;
         self.enabled = params.enabled;
         self.threshold_db = params.threshold_db;
         self.ratio = params.ratio.max(1.0);
@@ -94,10 +95,10 @@ impl Compressor {
         if rate_changed || hpf_changed {
             self.update_sidechain();
         }
-        if !params.enabled {
-            self.gain = 1.0;
-            self.gain_reduction_db = 0.0;
-            self.rms_power = 0.0;
+        // Re-enabling without a reset would reuse the sidechain filter history
+        // from before the bypass; clear it together with the detector.
+        if !params.enabled || !was_enabled {
+            self.reset();
         }
     }
 

@@ -233,7 +233,7 @@ pub fn import_autoeq(
     path: String,
 ) -> Result<AppView, String> {
     let text = fs::read_to_string(&path)
-        .map_err(|e| format!("Não foi possível ler o arquivo AutoEQ: {e}"))?;
+        .map_err(|e| format!("Não foi possível ler o arquivo AutoEQ/OPRA: {e}"))?;
     let parsed = parse_autoeq(&text)?;
     let fallback_name = Path::new(&path)
         .file_stem()

@@ -66,6 +66,17 @@ impl Default for AutoEqFilter {
     }
 }
 
+impl AutoEqFilter {
+    /// Clamps one filter into the range the engine renders safely. Used at the
+    /// import boundary so an estimate never reads a zero Q or a DC frequency.
+    pub fn clamped(mut self) -> Self {
+        self.freq = clamp(self.freq, 20.0, 20_000.0, 1_000.0);
+        self.gain_db = clamp(self.gain_db, -24.0, 24.0, 0.0);
+        self.q = clamp(self.q, 0.1, 18.0, 1.0);
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BassParams {
@@ -404,9 +415,7 @@ impl ProcessingParams {
         self.auto_eq.preamp_db = clamp(self.auto_eq.preamp_db, -24.0, 12.0, 0.0);
         self.auto_eq.filters.truncate(MAX_AUTOEQ_FILTERS);
         for filter in &mut self.auto_eq.filters {
-            filter.freq = clamp(filter.freq, 20.0, 20_000.0, 1_000.0);
-            filter.gain_db = clamp(filter.gain_db, -24.0, 24.0, 0.0);
-            filter.q = clamp(filter.q, 0.1, 18.0, 1.0);
+            *filter = filter.clamped();
         }
         self.auto_eq.name = self
             .auto_eq
@@ -419,9 +428,7 @@ impl ProcessingParams {
         self.ear_profile.preamp_db = clamp(self.ear_profile.preamp_db, -24.0, 12.0, 0.0);
         self.ear_profile.filters.truncate(MAX_AUTOEQ_FILTERS);
         for filter in &mut self.ear_profile.filters {
-            filter.freq = clamp(filter.freq, 20.0, 20_000.0, 1_000.0);
-            filter.gain_db = clamp(filter.gain_db, -24.0, 24.0, 0.0);
-            filter.q = clamp(filter.q, 0.1, 18.0, 1.0);
+            *filter = filter.clamped();
         }
 
         self.volume = clamp(self.volume, 0.0, 1.0, 1.0);

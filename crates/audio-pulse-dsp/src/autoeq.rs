@@ -93,12 +93,15 @@ fn filter_from_json(value: &Value) -> Option<AutoEqFilter> {
     let freq = number_key(object, &["frequency", "fc", "freq", "f"])?;
     let gain_db = number_key(object, &["gain_db", "gain", "gainDb"]).unwrap_or(0.0);
     let q = number_key(object, &["q", "Q"]).unwrap_or(0.707);
-    Some(AutoEqFilter {
-        kind,
-        freq,
-        gain_db,
-        q,
-    })
+    Some(
+        AutoEqFilter {
+            kind,
+            freq,
+            gain_db,
+            q,
+        }
+        .clamped(),
+    )
 }
 
 /// Largest static boost the filter cascade adds, in dB, sampled on a 1.03× log
@@ -138,7 +141,7 @@ pub fn parse_autoeq_text(text: &str) -> Result<ParsedAutoEq, String> {
     let mut parsed = ParsedAutoEq::default();
     let mut declared_preamp: Option<f32> = None;
     for raw in text.lines() {
-        let line = raw.trim();
+        let line = raw.trim().trim_start_matches('\u{feff}').trim();
         if line.is_empty()
             || line.starts_with('#')
             || line.starts_with("//")
@@ -172,12 +175,15 @@ pub fn parse_autoeq_text(text: &str) -> Result<ParsedAutoEq, String> {
             continue;
         };
         let q = token_number(&tokens, "Q").unwrap_or(0.707);
-        parsed.filters.push(AutoEqFilter {
-            kind,
-            freq,
-            gain_db,
-            q,
-        });
+        parsed.filters.push(
+            AutoEqFilter {
+                kind,
+                freq,
+                gain_db,
+                q,
+            }
+            .clamped(),
+        );
         if parsed.filters.len() >= MAX_AUTOEQ_FILTERS {
             break;
         }
@@ -249,6 +255,7 @@ fn collect_json(body: &Value, wrapper_name: Option<String>) -> Result<ParsedAuto
 }
 
 pub fn parse_autoeq_json(text: &str) -> Result<ParsedAutoEq, String> {
+    let text = text.trim_start_matches('\u{feff}');
     let value: Value = serde_json::from_str(text).map_err(|e| format!("JSON inválido: {e}"))?;
     if let Some(array) = value.as_array() {
         return collect_bands(array, None, None);
@@ -273,11 +280,11 @@ pub fn parse_autoeq_json(text: &str) -> Result<ParsedAutoEq, String> {
 /// Detects the format by content, not by extension: AutoEQ users rename files
 /// freely and OPRA profiles are often saved as `.txt` snippets.
 pub fn parse_autoeq(text: &str) -> Result<ParsedAutoEq, String> {
-    let trimmed = text.trim_start();
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
         parse_autoeq_json(trimmed)
     } else {
-        parse_autoeq_text(text)
+        parse_autoeq_text(trimmed)
     }
 }
 
@@ -406,5 +413,27 @@ Filter 4: OFF PK Fc 2000 Hz Gain -4.0 dB Q 1.20
         let json = format!(r#"{{"filters": [{}]}}"#, bands.join(","));
         let parsed = parse_autoeq_json(&json).unwrap();
         assert_eq!(parsed.filters.len(), MAX_AUTOEQ_FILTERS);
+    }
+
+    #[test]
+    fn strips_a_utf8_bom_from_json_and_text() {
+        let json = "\u{feff}{\"filters\":[{\"type\":\"PEAKING\",\"fc\":100,\"q\":1,\"gain\":3}]}";
+        assert_eq!(parse_autoeq(json).unwrap().filters.len(), 1);
+
+        let text = "\u{feff}Preamp: -2 dB\nFilter 1: ON PK Fc 100 Hz Gain 3 dB Q 1.0\n";
+        let parsed = parse_autoeq(text).unwrap();
+        assert!((parsed.preamp_db + 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn malformed_band_values_are_clamped_before_the_preamp_estimate() {
+        let json = r#"{"filters": [
+            {"type": "PEAKING", "fc": 0, "q": 0, "gain": 40}
+        ]}"#;
+        let parsed = parse_autoeq(json).unwrap();
+        assert_eq!(parsed.filters[0].freq, 20.0);
+        assert_eq!(parsed.filters[0].q, 0.1);
+        assert_eq!(parsed.filters[0].gain_db, 24.0);
+        assert!(parsed.preamp_db.is_finite() && parsed.preamp_db < 0.0);
     }
 }

@@ -69,7 +69,7 @@ Click any screenshot to open it at full resolution.
 | Ear profiling | Settings |
 | --- | --- |
 | <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Ear profiling page" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Settings page" /></a> |
-| Guided crop, local depth analysis, confidence gates and a reversible AutoEQ proposal. | Devices, routing, buffer, theme, language and global shortcuts. |
+| Guided crop, local depth analysis, confidence gates and a reversible ear correction. | Devices, routing, buffer, theme, language and global shortcuts. |
 
 ## How it works
 

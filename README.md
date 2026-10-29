@@ -69,7 +69,7 @@ Clique em qualquer captura para abrir em resolução máxima.
 | Perfil da orelha | Ajustes |
 | --- | --- |
 | <a href="docs/screenshots/ear.png"><img src="docs/screenshots/ear.png" alt="Página do perfil da orelha" /></a> | <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="Página de ajustes" /></a> |
-| Recorte guiado, análise de profundidade local, confiança e proposta de AutoEQ reversível. | Dispositivos, rota, buffer, tema, idioma e atalhos globais. |
+| Recorte guiado, análise de profundidade local, confiança e correção reversível. | Dispositivos, rota, buffer, tema, idioma e atalhos globais. |
 
 ## Como funciona
 

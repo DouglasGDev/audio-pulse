@@ -403,7 +403,7 @@ Harmônicos, corte e intensidade são independentes; com harmônicos em 0% resta
 
 O compressor musical usa detector de **potência RMS**, não de pico: um kick isolado não derruba o mix inteiro. O detector é estéreo-ligado e o sidechain passa por um high-pass de 70 Hz, então o grave profundo quase não chega ao detector; o limiter continua cuidando dos picos. Ataque, liberação, joelho e proporção vêm dos parâmetros da página **Dinâmica**. A redução de sons altos usa o mesmo compressor com o filtro do sidechain desligado, porque a proteção precisa atenuar todas as frequências por igual.
 
-O limiter trabalha com **look-ahead de 5 ms** (240 amostras a 48 kHz) e o detector combina o pico de amostra com uma estimativa inter-amostra: Lagrange de 8 pontos em três fases internas, ou seja, 4× de sobreamostragem. Em fs/4 — o caso em que as amostras ficam a 0,707 do pico da onda — o estimador lê 0,978 do pico real; um interpolador cúbico leria 0,884 e deixaria passar cerca de 1 dB acima do teto. A detecção atrasa 4 amostras, bem dentro das 240 do look-ahead. No harness, a onda reconstruída fica no máximo 0,23 dB acima do teto.
+O limiter trabalha com **look-ahead de 5 ms** (240 amostras a 48 kHz) e o detector combina o pico de amostra com uma estimativa inter-amostra: Lagrange de 8 pontos em três fases internas, ou seja, 4× de sobreamostragem. Em fs/4 — o caso em que as amostras ficam a 0,707 do pico da onda — o estimador lê 0,978 do pico real; um interpolador cúbico leria 0,884 e deixaria passar cerca de 1 dB acima do teto. A detecção atrasa cerca de 4 amostras, bem dentro das 240 do look-ahead. No harness, a onda reconstruída fica no máximo 0,23 dB acima do teto.
 
 Reajustar um filtro copia apenas os coeficientes e preserva a memória (`z1`/`z2`), então mover o HRTF, trocar a curva de um preset ou reajustar o EQ adaptativo não estala. Nada aloca no caminho de áudio.
 
@@ -525,7 +525,7 @@ Configuração, presets personalizados e perfis ficam em:
 
 A gravação é atômica (arquivo temporário + rename) e sofre debounce para não escrever a cada movimento de slider. Se o JSON estiver corrompido, ele é renomeado para `config.corrupt-<timestamp>.json` e o app inicia com padrões.
 
-Na primeira execução do Audio Pulse, se ainda não existir `config.json` na pasta nova, o app copia automaticamente a configuração, o `route-default.json` e a pasta `models/` de `%APPDATA%\Audio Pulse` (ou do diretório equivalente no macOS/Linux). A pasta antiga não é apagada, então voltar para uma versão anterior continua funcionando.
+Na primeira execução do Audio Pulse, se ainda não existir `config.json` na pasta nova, o app copia automaticamente a configuração, o `route-default.json` e a pasta `models/` de `%APPDATA%\SonicEnhance` (ou do diretório equivalente no macOS/Linux). A pasta antiga não é apagada, então voltar para uma versão anterior continua funcionando.
 
 A última análise da orelha fica no `localStorage` do webview, na chave `audiopulse.ear-profile`; o perfil aplicado (`enabled`, preamp e filtros) fica em `params.earProfile` no `config.json`, junto dos demais parâmetros. Remover o perfil zera esse estágio, e **Restaurar padrões** zera junto com o resto do som. O modelo de profundidade baixado fica em `models/depth-anything-v2-small.onnx` ao lado do `config.json`; apagar esse arquivo força um novo download na próxima análise. O arquivo int8 de versões anteriores é removido após o primeiro download do fp32.
 
